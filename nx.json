@@ -1,0 +1,41 @@
+{
+  "installation": {
+    "version": "22.3.3"
+  },
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "targetDefaults": {
+    "build": {
+      "cache": true,
+      "dependsOn": ["^build"]
+    },
+    "test": {
+      "cache": true,
+      "inputs": ["default", "^default"]
+    },
+    "lint": {
+      "cache": true
+    },
+    "install": {
+      "cache": true,
+      "inputs": ["default"]
+    },
+    "start": {
+      "cache": false
+    }
+  },
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "production": [
+      "default",
+      "!{projectRoot}/**/?(.*)spec.py",
+      "!{projectRoot}/tests/**/*"
+    ],
+    "sharedGlobals": []
+  },
+  "generators": {
+    "@nxlv/python:project": {
+      "projectType": "application"
+    }
+  },
+  "defaultBase": "main"
+}

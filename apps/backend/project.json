@@ -1,0 +1,105 @@
+{
+  "name": "backend",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/backend/src",
+  "targets": {
+    "install": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv pip install -r requirements.txt",
+        "cwd": "apps/backend"
+      },
+      "outputs": ["{workspaceRoot}/apps/backend/.venv"],
+      "cache": true
+    },
+    "start": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "source .venv/bin/activate && python main.py",
+        "cwd": "apps/backend"
+      },
+      "dependsOn": ["install"]
+    },
+    "start-uv": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv run python main.py",
+        "cwd": "apps/backend"
+      },
+      "dependsOn": ["install"]
+    },
+    "init-db": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv run python init_db.py",
+        "cwd": "apps/backend"
+      },
+      "dependsOn": ["install"]
+    },
+    "test": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "pytest tests/ -v",
+        "cwd": "apps/backend"
+      },
+      "outputs": [
+        "{workspaceRoot}/apps/backend/.pytest_cache",
+        "{workspaceRoot}/apps/backend/htmlcov"
+      ],
+      "cache": true,
+      "dependsOn": ["install"]
+    },
+    "lint": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv run pyright src/",
+        "cwd": "apps/backend"
+      },
+      "cache": true,
+      "dependsOn": ["install"]
+    },
+    "lint:ruff": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv run ruff check src/",
+        "cwd": "apps/backend"
+      },
+      "cache": true,
+      "dependsOn": ["install"]
+    },
+    "format": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "black src/",
+        "cwd": "apps/backend"
+      },
+      "cache": true
+    },
+    "format-check": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "black --check src/",
+        "cwd": "apps/backend"
+      },
+      "cache": true
+    },
+    "setup-venv": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv venv",
+        "cwd": "apps/backend"
+      },
+      "outputs": ["{workspaceRoot}/apps/backend/.venv"]
+    },
+    "phase1": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv run python test_phase1_scraper.py",
+        "cwd": "apps/backend"
+      },
+      "dependsOn": ["install"]
+    }
+  },
+  "tags": ["type:application", "lang:python"]
+}

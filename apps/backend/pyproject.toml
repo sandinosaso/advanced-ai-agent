@@ -1,0 +1,90 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "advanced-ai-agent"
+version = "0.1.0"
+description = "An autonomous AI agent for automatizing tasks"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Sandino Nunez Acuna" }
+]
+keywords = ["ai", "langchain", "langgraph", "job-search", "rag"]
+
+dependencies = [
+    "langchain>=0.3.13",
+    "langchain-openai>=0.2.14",
+    "langgraph>=0.2.59",
+    "langchain-community>=0.3.13",
+    "firecrawl-py>=1.0.0",
+    "pydantic>=2.10.5",
+    "pydantic-settings>=2.7.1",
+    "python-dotenv>=1.0.1",
+    "chromadb>=0.5.23",
+    "sentence-transformers>=3.3.1",
+    "loguru>=0.7.3",
+    "httpx>=0.28.1",
+    "tiktoken>=0.8.0",
+    "pyyaml>=6.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.2",
+    "black>=24.10.0",
+    "ruff>=0.8.6",
+]
+api = [
+    "fastapi>=0.115.6",
+    "uvicorn[standard]>=0.34.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | venv
+  | build
+  | dist
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+addopts = "-v --strict-markers"
+
+[tool.pyright]
+include = ["src"]
+exclude = ["**/__pycache__", ".venv", "venv"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"

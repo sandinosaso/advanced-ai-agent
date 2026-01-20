@@ -1,0 +1,19 @@
+{
+  "name": "advanced-ai-agent",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "backend:install": "nx run backend:install",
+    "backend:start": "nx run backend:start-uv",
+    "backend:init-db": "nx run backend:init-db",
+    "backend:test": "nx run backend:test",
+    "backend:lint": "nx run backend:lint",
+    "backend:format": "nx run backend:format",
+    "graph": "nx graph",
+    "affected:test": "nx affected -t test",
+    "affected:lint": "nx affected -t lint"
+  },
+  "devDependencies": {
+    "@nxlv/python": "^22.0.3"
+  }
+}
