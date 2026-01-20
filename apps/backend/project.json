@@ -99,6 +99,14 @@
         "cwd": "apps/backend"
       },
       "dependsOn": ["install"]
+    },
+    "phase2": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv run python test_phase2_sql_agent.py",
+        "cwd": "apps/backend"
+      },
+      "dependsOn": ["install"]
     }
   },
   "tags": ["type:application", "lang:python"]

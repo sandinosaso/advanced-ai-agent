@@ -9,6 +9,7 @@
     "backend:test": "nx run backend:test",
     "backend:lint": "nx run backend:lint",
     "backend:format": "nx run backend:format",
+    "backend:phase2": "nx run backend:phase2",
     "graph": "nx graph",
     "affected:test": "nx affected -t test",
     "affected:lint": "nx affected -t lint"
