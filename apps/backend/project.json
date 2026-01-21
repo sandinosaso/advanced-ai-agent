@@ -107,6 +107,38 @@
         "cwd": "apps/backend"
       },
       "dependsOn": ["install"]
+    },
+    "phase3:chunking": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv run python -m src.utils.chunking_strategies",
+        "cwd": "apps/backend"
+      },
+      "dependsOn": ["install"]
+    },
+    "phase3:populate": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv run python populate_vector_store.py",
+        "cwd": "apps/backend"
+      },
+      "dependsOn": ["install"]
+    },
+    "phase3:populate-reset": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv run python populate_vector_store.py --reset",
+        "cwd": "apps/backend"
+      },
+      "dependsOn": ["install"]
+    },
+    "phase3:populate-test": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv run python populate_vector_store.py --test",
+        "cwd": "apps/backend"
+      },
+      "dependsOn": ["install"]
     }
   },
   "tags": ["type:application", "lang:python"]

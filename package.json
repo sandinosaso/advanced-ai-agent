@@ -10,7 +10,12 @@
     "backend:lint": "nx run backend:lint",
     "backend:format": "nx run backend:format",
     "backend:phase2": "nx run backend:phase2",
+    "backend:phase3:chunking": "nx run backend:phase3:chunking",
+    "backend:phase3:populate": "nx run backend:phase3:populate",
+    "backend:phase3:populate-reset": "nx run backend:phase3:populate-reset",
+    "backend:phase3:populate-test": "nx run backend:phase3:populate-test",
     "graph": "nx graph",
+    "reset": "nx reset",
     "affected:test": "nx affected -t test",
     "affected:lint": "nx affected -t lint"
   },
