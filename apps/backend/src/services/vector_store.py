@@ -169,7 +169,13 @@ class VectorStore:
             batch = chunks[i:i + batch_size]
             
             # Prepare data for ChromaDB
-            ids = [f"{collection_type}_{i+j}" for j in range(len(batch))]
+            # Use source from metadata to create unique IDs across collections
+            ids = []
+            for j, chunk in enumerate(batch):
+                source = chunk.get("metadata", {}).get("source", "unknown")
+                chunk_idx = chunk.get("metadata", {}).get("chunk_index", i+j)
+                ids.append(f"{source}_{chunk_idx}_{i+j}")
+            
             texts = [chunk["text"] for chunk in batch]
             embeddings = [chunk["embedding"] for chunk in batch]
             metadatas = [chunk.get("metadata", {}) for chunk in batch]

@@ -139,6 +139,22 @@
         "cwd": "apps/backend"
       },
       "dependsOn": ["install"]
+    },
+    "phase4": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv run python test_phase4_orchestrator.py",
+        "cwd": "apps/backend"
+      },
+      "dependsOn": ["install"]
+    },
+    "phase4:interactive": {
+      "executor": "@nxlv/python:run-commands",
+      "options": {
+        "command": "uv run python test_phase4_orchestrator.py --interactive",
+        "cwd": "apps/backend"
+      },
+      "dependsOn": ["install"]
     }
   },
   "tags": ["type:application", "lang:python"]
