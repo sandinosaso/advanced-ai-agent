@@ -160,21 +160,38 @@ Respond with ONLY one word: SQL or RAG"""
         return state
     
     def _finalize_answer(self, state: AgentState) -> AgentState:
-        """Finalize the answer and prepare for return"""
+        """
+        Finalize the answer and prepare for return
+        
+        This node uses the LLM to present the final answer in a natural way.
+        This allows streaming of the final response to the user.
+        """
         
         # Determine which result to use
         if state.get("sql_result"):
-            final_answer = state["sql_result"]
+            raw_answer = state["sql_result"]
             source = "SQL Database"
         elif state.get("rag_result"):
-            final_answer = state["rag_result"]
+            raw_answer = state["rag_result"]
             source = "Company Documents"
         else:
-            final_answer = "I couldn't find an answer to your question."
+            raw_answer = "I couldn't find an answer to your question."
             source = "None"
         
+        # Use LLM to present the final answer (this enables streaming)
+        finalize_prompt = f"""Present this answer to the user in a clear, natural way.
+
+Source: {source}
+Answer: {raw_answer}
+
+Present the answer directly without adding "The answer is" or similar phrases."""
+        
+        # Call LLM to generate final answer (this will stream)
+        final_response = self.llm.invoke(finalize_prompt)
+        final_answer = final_response.content
+        
         state["final_answer"] = final_answer
-        state["messages"].append(AIMessage(content=f"Final answer from {source}: {final_answer}"))
+        state["messages"].append(AIMessage(content=final_answer))
         state["next_step"] = "end"
         
         return state
@@ -281,6 +298,34 @@ Respond with ONLY one word: SQL or RAG"""
         """
         result = self.ask(question, verbose=False)
         return result["answer"]
+    
+    async def astream_events(self, input_data: dict, version: str = "v1"):
+        """
+        Stream events from the LangGraph workflow execution
+        
+        This is a convenience wrapper around the workflow's astream_events method,
+        designed for use with FastAPI streaming endpoints.
+        
+        Args:
+            input_data: Initial state for the workflow (must match AgentState structure)
+            version: Stream events API version (default: "v1")
+        
+        Yields:
+            Event dictionaries from the workflow execution
+            
+        Example:
+            ```python
+            async for event in agent.astream_events(
+                {"question": "How many technicians?", "messages": [], ...},
+                version="v1"
+            ):
+                if event["event"] == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    print(chunk.content)
+            ```
+        """
+        async for event in self.workflow.astream_events(input_data, version=version):
+            yield event
 
 
 if __name__ == "__main__":

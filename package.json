@@ -16,6 +16,7 @@
     "backend:phase3:populate-test": "nx run backend:phase3:populate-test",
     "backend:phase4": "nx run backend:phase4",
     "backend:phase4:interactive": "nx run backend:phase4:interactive",
+    "backend:phase5:api": "nx run backend:phase5:api",
     "graph": "nx graph",
     "reset": "nx reset",
     "affected:test": "nx affected -t test",

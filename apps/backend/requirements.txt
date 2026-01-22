@@ -16,6 +16,7 @@ faker==33.1.0
 # Web Framework
 fastapi==0.115.6
 uvicorn[standard]==0.40.0
+python-multipart==0.0.20
 
 # Data Validation & Models
 pydantic==2.12.5

@@ -383,7 +383,45 @@ class AgentState(TypedDict):
 
 ---
 
-### Phase 5: Memory Management
+### Phase 5: API Exposure & Real-Time Streaming ⭐ CURRENT
+**Status**: See [PHASE5_PLAN.md](./PHASE5_PLAN.md) for detailed implementation guide
+
+**Goal**: Transform the command-line OrchestratorAgent into a web-accessible streaming API
+
+**Tasks**:
+- [ ] Set up FastAPI application
+- [ ] Create Pydantic request/response models
+- [ ] Implement SSE streaming endpoint (`/api/chat/stream`)
+- [ ] Integrate LangChain `astream_events()` for token streaming
+- [ ] Configure CORS for frontend integration
+- [ ] Add comprehensive error handling
+- [ ] Write API tests (curl, Postman, Python client)
+- [ ] Generate automatic API documentation (Swagger UI)
+
+**Learning Focus**: FastAPI, Server-Sent Events (SSE), async streaming, API design
+
+**Tech Stack**:
+- **FastAPI** - Modern Python web framework
+- **Uvicorn** - ASGI server
+- **Server-Sent Events** - One-way streaming (server → client)
+- **Pydantic** - Request validation and serialization
+
+**Example Flow**:
+```
+Browser/Frontend
+   ↓ POST /api/chat/stream
+FastAPI Endpoint
+   ↓ astream_events()
+OrchestratorAgent
+   ↓ Token streaming
+SSE Response: data: {"token": "..."}\n\n
+```
+
+**Deliverable**: Production-ready streaming API ready for Node.js proxy integration
+
+---
+
+### Phase 6: Memory Management
 **Goal**: Add conversation and entity memory
 
 **Tasks**:
@@ -431,7 +469,7 @@ Agent: [uses entity_memory: John] "John already has..."
 
 ---
 
-### Phase 6: Rule Engine & Validation
+### Phase 7: Rule Engine & Validation
 **Goal**: Formalize business rules and constraint checking
 
 **Tasks**:
@@ -496,7 +534,7 @@ class RuleEngine:
 
 ---
 
-### Phase 7: MCP (Model Context Protocol)
+### Phase 8: MCP (Model Context Protocol)
 **Goal**: Standardize tool interfaces and context management
 
 **Tasks**:
@@ -561,7 +599,7 @@ class PageContextProvider:
 
 ---
 
-### Phase 8: Web Integration
+### Phase 9: Web Integration
 **Goal**: Embed agent in a real web application
 
 **Tasks**:
@@ -640,7 +678,7 @@ async def stream_agent(question: str):
 
 ---
 
-### Phase 9: Production Patterns
+### Phase 10: Production Patterns
 **Goal**: Add observability, error handling, and guardrails
 
 **Tasks**:
@@ -724,11 +762,12 @@ After completing each phase, you will have learned:
 | **2** | Tool creation, SQL safety, basic RAG, error handling |
 | **3** | Embeddings, chunking strategies, vector search, similarity |
 | **4** | LangGraph workflows, state management, parallel execution |
-| **5** | Memory systems, context windows, multi-turn conversations |
-| **6** | Rule engines, hybrid retrieval, constraint validation |
-| **7** | Tool abstraction, MCP protocol, production patterns |
-| **8** | API design, frontend integration, streaming, UX |
-| **9** | Observability, tracing, guardrails, reliability |
+| **5** | FastAPI, SSE streaming, async APIs, API design patterns |
+| **6** | Memory systems, context windows, multi-turn conversations |
+| **7** | Rule engines, hybrid retrieval, constraint validation |
+| **8** | Tool abstraction, MCP protocol, production patterns |
+| **9** | Frontend integration, React components, chat UX |
+| **10** | Observability, tracing, guardrails, reliability |
 
 ---
 
