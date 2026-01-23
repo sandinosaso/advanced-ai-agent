@@ -1,115 +1,107 @@
 """
-Pydantic models for API request and response validation
+Pydantic models for internal API contract
+
+This is an internal service API - UI concepts are handled by the Node.js BFF layer.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, Literal
+from typing import Optional, Literal, Dict, Any
 
 
-class ChatRequest(BaseModel):
-    """
-    Request model for chat endpoint
-    
-    Attributes:
-        message: The user's question or message (1-2000 characters)
-        conversation_id: Optional conversation ID for tracking multi-turn conversations
-    """
+class AgentInput(BaseModel):
+    """User's message input to the agent"""
     message: str = Field(
-        ..., 
-        min_length=1, 
+        ...,
+        min_length=1,
         max_length=2000,
-        description="The user's question or message to the AI agent"
+        description="The user's question or message"
     )
-    conversation_id: Optional[str] = Field(
-        None,
-        description="Optional conversation ID for multi-turn conversations"
-    )
+
+
+class ConversationContext(BaseModel):
+    """
+    Conversation context provided by the Node.js BFF
+    
+    This includes authentication and tenant information that Python trusts.
+    """
+    id: str = Field(..., description="Conversation/session ID")
+    user_id: str = Field(..., description="Authenticated user ID")
+    company_id: str = Field(..., description="Tenant/company ID for data isolation")
+
+
+class ChatStreamRequest(BaseModel):
+    """
+    Internal API request for chat streaming
+    
+    This is called by the Node.js BFF, not directly by browsers.
+    """
+    input: AgentInput
+    conversation: ConversationContext
     
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
-                    "message": "How many technicians are active?",
-                    "conversation_id": "conv-123"
-                },
-                {
-                    "message": "What are the overtime rules?"
-                }
-            ]
-        }
-    }
-
-
-class ChatToken(BaseModel):
-    """
-    Individual token in the SSE stream
-    
-    Token types:
-    - reasoning: Intermediate reasoning/thinking (classification, SQL generation, etc.)
-    - final_answer: The final response to show the user
-    - tool_call: Tool execution marker (e.g., "Querying database...")
-    - error: Error message
-    
-    Attributes:
-        token: The text token being streamed
-        type: Type of token (reasoning, final_answer, tool_call, error)
-    """
-    token: str = Field(..., description="The text token")
-    type: Literal["reasoning", "final_answer", "tool_call", "error"] = Field(
-        default="final_answer",
-        description="Type of token being streamed"
-    )
-    
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "token": "SELECT COUNT(*) FROM technicians",
-                    "type": "reasoning"
-                },
-                {
-                    "token": "There are 10 active technicians.",
-                    "type": "final_answer"
-                },
-                {
-                    "token": "[Using SQLQueryAgent]",
-                    "type": "tool_call"
-                }
-            ]
-        }
-    }
-
-
-class ChatComplete(BaseModel):
-    """
-    Stream completion marker
-    
-    Sent as the final event in an SSE stream to indicate completion
-    
-    Attributes:
-        done: Always True, indicates stream is complete
-        metadata: Optional metadata about the completed response including token counts
-    """
-    done: bool = Field(default=True, description="Stream completion flag")
-    metadata: Optional[dict] = Field(
-        None,
-        description="Metadata with token counts: tokens_sent, reasoning_tokens, final_tokens"
-    )
-    
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "done": True,
-                    "metadata": {
-                        "tokens_sent": 28,
-                        "reasoning_tokens": 22,
-                        "final_tokens": 6
+                    "input": {
+                        "message": "How many technicians are active?"
+                    },
+                    "conversation": {
+                        "id": "conv-uuid-123",
+                        "user_id": "user-456",
+                        "company_id": "company-789"
                     }
                 }
             ]
         }
     }
+
+
+class StreamEvent(BaseModel):
+    """
+    Semantic event emitted during agent execution
+    
+    Event types:
+    - token: Content token (channel indicates which node/phase)
+    - tool_start: Tool execution beginning
+    - route_decision: Agent routing decision
+    - complete: Stream finished
+    - error: Error occurred
+    """
+    event: Literal["token", "tool_start", "route_decision", "complete", "error"]
+    
+    # Optional fields depending on event type
+    channel: Optional[Literal["classify", "sql_agent", "rag_agent", "final"]] = None
+    content: Optional[str] = None
+    tool: Optional[str] = None
+    route: Optional[Literal["sql", "rag"]] = None
+    stats: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "event": "token",
+                    "channel": "final",
+                    "content": "There are 10 technicians"
+                },
+                {
+                    "event": "tool_start",
+                    "tool": "sql_agent"
+                },
+                {
+                    "event": "route_decision",
+                    "route": "sql"
+                },
+                {
+                    "event": "complete",
+                    "stats": {"tokens": 42, "duration_ms": 1500}
+                }
+            ]
+        }
+    }
+    
+
 
 
 class HealthResponse(BaseModel):

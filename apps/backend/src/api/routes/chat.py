@@ -1,5 +1,8 @@
 """
-Chat streaming endpoint using Server-Sent Events (SSE)
+Internal chat streaming endpoint using Server-Sent Events (SSE)
+
+This is an internal service API called by the Node.js BFF layer.
+It emits semantic events, not UI-specific tokens.
 """
 
 from fastapi import APIRouter, HTTPException
@@ -7,40 +10,43 @@ from fastapi.responses import StreamingResponse
 from typing import AsyncGenerator
 from loguru import logger
 
-from src.api.models import ChatRequest, ChatToken, ChatComplete
+from src.api.models import ChatStreamRequest, StreamEvent
 from src.agents.orchestrator_agent import OrchestratorAgent
 
 
-router = APIRouter(prefix="/api/chat", tags=["chat"])
+router = APIRouter(prefix="/internal/chat", tags=["internal"])
 
 
 async def stream_orchestrator_response(
-    message: str, 
-    conversation_id: str | None
+    message: str,
+    conversation_id: str,
+    user_id: str,
+    company_id: str
 ) -> AsyncGenerator[str, None]:
     """
-    Stream tokens from OrchestratorAgent using LangChain events
+    Stream semantic events from OrchestratorAgent
     
-    This generator:
-    1. Initializes the OrchestratorAgent
-    2. Streams events from the LangGraph workflow
-    3. Filters for chat model token events
-    4. Yields SSE-formatted messages
+    Emits structured events for Node.js to map to UI concepts.
+    Does not contain UI-specific logic (emojis, labels, etc.)
     
     Args:
-        message: User's question/message
-        conversation_id: Optional conversation ID for tracking
+        message: User's question
+        conversation_id: Conversation ID from Node.js
+        user_id: Authenticated user ID
+        company_id: Tenant ID for data isolation
     
     Yields:
-        SSE-formatted strings: "data: {json}\n\n"
+        SSE-formatted strings with semantic events
     """
     try:
-        logger.info(f"Starting stream for message: {message[:50]}...")
+        logger.info(f"Stream started - conversation={conversation_id}, user={user_id}, company={company_id}")
+        logger.debug(f"Message: {message[:100]}...")
         
         # Initialize agent
         agent = OrchestratorAgent()
         
         # Prepare initial state
+        # TODO: Load conversation history from database using conversation_id
         initial_state = {
             "messages": [],
             "question": message,
@@ -50,280 +56,194 @@ async def stream_orchestrator_response(
             "final_answer": None
         }
         
-        # Track if we've sent any tokens
-        tokens_sent = 0
-        reasoning_tokens = 0
-        final_tokens = 0
+        # Track statistics
+        total_tokens = 0
         current_node = None
-        route_detected = False
-        classification_buffer = ""
         
-        # Stream events from the workflow
-        async for event in agent.workflow.astream_events(
-            initial_state,
-            version="v1"
-        ):
+        # Stream events from the agent workflow
+        async for event in agent.astream_events(initial_state, version="v1"):
             event_type = event.get("event")
             event_name = event.get("name", "")
-            event_tags = event.get("tags", [])
             
-            # Track which node we're currently in by looking at multiple event types
+            # Track current node
             if event_type in ["on_chain_start", "on_llm_start"]:
-                # Log all tags for debugging (first 3 events only)
-                if tokens_sent < 3:
-                    logger.info(f"Event: {event_type}, Name: {event_name}, Tags: {event_tags}")
-                
-                # Check the NAME field for node information (not tags!)
+                # Detect node transitions
                 if event_name == "classify":
                     current_node = "classify"
-                    logger.debug("Entering classify node")
                 elif event_name == "sql_agent":
                     current_node = "sql_agent"
-                    # Emit route decision as tool_call
-                    if not route_detected:
-                        route_event = ChatToken(
-                            token="🔍 Querying database",
-                            type="tool_call"
-                        )
-                        yield f"data: {route_event.model_dump_json()}\n\n"
-                        route_detected = True
-                    logger.debug("Routing to SQL agent")
+                    # Emit tool start event
+                    tool_event = StreamEvent(
+                        event="tool_start",
+                        tool="sql_agent"
+                    )
+                    yield f"data: {tool_event.model_dump_json()}\n\n"
                 elif event_name == "rag_agent":
                     current_node = "rag_agent"
-                    # Emit route decision as tool_call
-                    if not route_detected:
-                        route_event = ChatToken(
-                            token="📚 Searching knowledge base",
-                            type="tool_call"
-                        )
-                        yield f"data: {route_event.model_dump_json()}\n\n"
-                        route_detected = True
-                    logger.debug("Routing to RAG agent")
+                    # Emit tool start event
+                    tool_event = StreamEvent(
+                        event="tool_start",
+                        tool="rag_agent"
+                    )
+                    yield f"data: {tool_event.model_dump_json()}\n\n"
                 elif event_name == "finalize":
-                    current_node = "finalize"
-                    logger.debug("Detected finalize node")
-                
-                # Fallback: Also check tags for node information
-                for tag in event_tags:
-                    # Detect classify node
-                    if "classify" in tag.lower() and ":" in tag:
-                        current_node = "classify"
-                        logger.debug("Entering classify node")
-                        break
-                    # Look for patterns like: graph:step:3, seq:step:finalize, etc.
-                    elif "finalize" in tag.lower():
-                        current_node = "finalize"
-                        logger.debug(f"Detected finalize node from tag: {tag}")
-                        break
-                    elif "sql_agent" in tag.lower():
-                        current_node = "sql_agent"
-                        # Emit route decision as tool_call
-                        if not route_detected:
-                            route_event = ChatToken(
-                                token="🔍 Querying database",
-                                type="tool_call"
-                            )
-                            yield f"data: {route_event.model_dump_json()}\n\n"
-                            route_detected = True
-                        logger.debug(f"Routing to SQL agent")
-                        break
-                    elif "rag_agent" in tag.lower():
-                        current_node = "rag_agent"
-                        # Emit route decision as tool_call
-                        if not route_detected:
-                            route_event = ChatToken(
-                                token="📚 Searching knowledge base",
-                                type="tool_call"
-                            )
-                            yield f"data: {route_event.model_dump_json()}\n\n"
-                            route_detected = True
-                        logger.debug(f"Routing to RAG agent")
-                        break
-                    elif tag.startswith("graph:step:"):
-                        pass
-                    elif ":" in tag and tag.split(":")[-1] in ["classify", "sql_agent", "rag_agent", "finalize"]:
-                        node_name = tag.split(":")[-1]
-                        current_node = node_name
-                        
-                        # Emit route decision when entering agent nodes
-                        if node_name == "sql_agent" and not route_detected:
-                            route_event = ChatToken(
-                                token="🔍 Querying database",
-                                type="tool_call"
-                            )
-                            yield f"data: {route_event.model_dump_json()}\n\n"
-                            route_detected = True
-                        elif node_name == "rag_agent" and not route_detected:
-                            route_event = ChatToken(
-                                token="📚 Searching knowledge base",
-                                type="tool_call"
-                            )
-                            yield f"data: {route_event.model_dump_json()}\n\n"
-                            route_detected = True
-                        
-                        logger.debug(f"Entering node: {current_node}")
-                        break
-                
-                # Also check event name
-                if "finalize" in event_name.lower():
-                    current_node = "finalize"
-                    logger.debug(f"Detected finalize node from name: {event_name}")
+                    current_node = "final"
             
-            # Filter for chat model streaming events
+            # Stream content tokens
             if event_type == "on_chat_model_stream":
                 chunk = event["data"]["chunk"]
                 
-                # Extract content from the chunk
                 if hasattr(chunk, "content") and chunk.content:
-                    
-                    # SKIP ALL TOKENS FROM CLASSIFY NODE
-                    # The classify node only returns "SQL" or "RAG" for routing
-                    # We'll show the route decision as a tool_call when entering sql_agent/rag_agent
+                    # Skip classification tokens (internal routing only)
                     if current_node == "classify":
-                        continue  # Skip this token completely
+                        continue
                     
-                    tokens_sent += 1
+                    total_tokens += 1
                     
-                    # Log first token to help debug
-                    if tokens_sent == 1:
-                        logger.info(f"First token - current_node: {current_node}")
-                    
-                    # Determine if we're in the finalize node (final answer)
-                    # or in other nodes (reasoning)
-                    if current_node == "finalize":
-                        token_type = "final_answer"
-                        final_tokens += 1
-                    else:
-                        token_type = "reasoning"
-                        reasoning_tokens += 1
-                    
-                    token_data = ChatToken(
-                        token=chunk.content,
-                        type=token_type
+                    # Emit semantic token event
+                    token_event = StreamEvent(
+                        event="token",
+                        channel=current_node,
+                        content=chunk.content
                     )
-                    yield f"data: {token_data.model_dump_json()}\n\n"
+                    yield f"data: {token_event.model_dump_json()}\n\n"
             
-            # Capture tool execution starts
-            elif event["event"] == "on_tool_start":
-                tool_name = event.get("name", "unknown")
-                logger.debug(f"Tool started: {tool_name}")
-                # Optionally send a marker that a tool is being used
-                # This is useful for showing "Querying database..." in UI
-                tool_marker = ChatToken(
-                    token=f"[Using {tool_name}]",
-                    type="tool_call"
-                )
-                yield f"data: {tool_marker.model_dump_json()}\n\n"
+            # Detect route decisions from classification result
+            elif event_type == "on_chain_end" and event_name == "classify":
+                # Extract classification result
+                outputs = event.get("data", {}).get("output", {})
+                next_step = outputs.get("next_step", "")
+                
+                if next_step in ["sql", "rag"]:
+                    route_event = StreamEvent(
+                        event="route_decision",
+                        route=next_step
+                    )
+                    yield f"data: {route_event.model_dump_json()}\n\n"
         
-        logger.info(f"Stream completed. Tokens sent: {tokens_sent} (reasoning: {reasoning_tokens}, final: {final_tokens})")
+        logger.info(f"Stream completed - tokens={total_tokens}")
         
-        # Send completion marker
-        complete = ChatComplete(
-            done=True,
-            metadata={
-                "tokens_sent": tokens_sent,
-                "reasoning_tokens": reasoning_tokens,
-                "final_tokens": final_tokens
+        # Send completion event
+        complete_event = StreamEvent(
+            event="complete",
+            stats={
+                "tokens": total_tokens,
+                "conversation_id": conversation_id
             }
         )
-        yield f"data: {complete.model_dump_json()}\n\n"
+        yield f"data: {complete_event.model_dump_json()}\n\n"
         
     except Exception as e:
-        logger.error(f"Error in stream: {str(e)}", exc_info=True)
-        # Send error token
-        error_data = ChatToken(
-            token=f"Error: {str(e)}",
-            type="error"
+        logger.error(f"Stream error: {str(e)}", exc_info=True)
+        # Send error event
+        error_event = StreamEvent(
+            event="error",
+            error=str(e)
         )
-        yield f"data: {error_data.model_dump_json()}\n\n"
-        
-        # Still send completion
-        complete = ChatComplete(done=True, metadata={"error": True})
-        yield f"data: {complete.model_dump_json()}\n\n"
+        yield f"data: {error_event.model_dump_json()}\n\n"
 
 
 @router.post("/stream")
-async def chat_stream(request: ChatRequest):
+async def chat_stream(request: ChatStreamRequest):
     """
-    Stream chat responses using Server-Sent Events (SSE)
+    Internal streaming endpoint for agent execution
     
-    This endpoint:
-    - Accepts a chat message
-    - Routes it through the OrchestratorAgent
-    - Streams tokens back in real-time using SSE
-    - Tags tokens by type: reasoning vs final_answer
+    **Called by:** Node.js BFF layer (not browsers directly)
     
-    **Example Usage:**
+    **Purpose:** Execute OrchestratorAgent and stream semantic events
     
-    ```bash
-    curl -N -X POST http://localhost:8000/api/chat/stream \\
-         -H "Content-Type: application/json" \\
-         -d '{"message": "How many technicians are active?"}'
+    **Authentication:** Trusts Node.js - does not authenticate
+    
+    **Request:**
+    ```json
+    {
+      "input": {
+        "message": "How many technicians are active?"
+      },
+      "conversation": {
+        "id": "conv-uuid-123",
+        "user_id": "user-456",
+        "company_id": "company-789"
+      }
+    }
     ```
     
-    **Response Format:**
+    **Response:** SSE stream with semantic events
     
-    Each line is an SSE event. The stream includes:
+    **Event Types:**
     
-    1. **Reasoning tokens** (classification, SQL generation):
-    ```
-    data: {"token": "SQL", "type": "reasoning"}
-    data: {"token": "SELECT COUNT(*)", "type": "reasoning"}
-    ```
-    
-    2. **Tool execution markers**:
-    ```
-    data: {"token": "[Using SQLQueryAgent]", "type": "tool_call"}
+    1. **route_decision** - Agent routing decision
+    ```json
+    {"event": "route_decision", "route": "sql"}
     ```
     
-    3. **Final answer tokens**:
-    ```
-    data: {"token": "There", "type": "final_answer"}
-    data: {"token": " are", "type": "final_answer"}
-    data: {"token": " 10", "type": "final_answer"}
+    2. **tool_start** - Tool execution beginning
+    ```json
+    {"event": "tool_start", "tool": "sql_agent"}
     ```
     
-    4. **Completion marker with metadata**:
+    3. **token** - Content token with channel
+    ```json
+    {"event": "token", "channel": "final", "content": "There are"}
     ```
-    data: {"done": true, "metadata": {"tokens_sent": 28, "reasoning_tokens": 22, "final_tokens": 6}}
+    
+    4. **complete** - Stream finished
+    ```json
+    {"event": "complete", "stats": {"tokens": 42}}
     ```
     
-    **Token Types:**
-    - `reasoning`: Intermediate AI thinking (show in gray bubble)
-    - `final_answer`: Final response to user (main chat bubble)
-    - `tool_call`: Tool execution indicator
-    - `error`: Error messages
+    5. **error** - Error occurred
+    ```json
+    {"event": "error", "error": "message"}
+    ```
     
-    **Frontend Usage:**
+    **Channels:**
+    - `classify`: Classification reasoning (usually skipped)
+    - `sql_agent`: SQL generation reasoning
+    - `rag_agent`: RAG retrieval reasoning
+    - `final`: Final answer to user
     
-    Use different UI for reasoning vs final answer:
-    ```typescript
-    if (type === 'reasoning') {
-      // Show in "thinking..." bubble (gray, replaceable)
-      updateThinkingBubble(token);
-    } else if (type === 'final_answer') {
-      // Hide thinking, show final answer
-      showFinalAnswer(token);
+    **Node.js Integration:**
+    
+    Node.js BFF layer maps semantic events to UI concepts:
+    ```javascript
+    if (event.event === "tool_start") {
+      if (event.tool === "sql_agent") {
+        ui.emit("🔍 Querying database");
+      } else if (event.tool === "rag_agent") {
+        ui.emit("📚 Searching knowledge base");
+      }
+    }
+    
+    if (event.channel === "final") {
+      ui.appendToFinalAnswer(event.content);
     }
     ```
     
     Args:
-        request: ChatRequest with message and optional conversation_id
+        request: ChatStreamRequest with input and conversation context
     
     Returns:
-        StreamingResponse with text/event-stream content type
+        StreamingResponse with text/event-stream
     """
-    logger.info(f"Received chat stream request: {request.message[:100]}...")
+    logger.info(
+        f"Internal stream request - "
+        f"conversation={request.conversation.id}, "
+        f"user={request.conversation.user_id}, "
+        f"company={request.conversation.company_id}"
+    )
     
     return StreamingResponse(
         stream_orchestrator_response(
-            request.message, 
-            request.conversation_id
+            message=request.input.message,
+            conversation_id=request.conversation.id,
+            user_id=request.conversation.user_id,
+            company_id=request.conversation.company_id
         ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # Disable nginx buffering
+            "X-Accel-Buffering": "no",
         }
     )
