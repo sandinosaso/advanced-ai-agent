@@ -5,6 +5,8 @@ import os
 import time
 import uuid
 import functools
+import ast
+import re
 from typing import TypedDict, List, Dict, Any, Optional
 
 from langgraph.graph import StateGraph, END
@@ -33,8 +35,10 @@ class SQLGraphState(TypedDict):
     join_plan: str
     sql: str
     result: Optional[str]
+    column_names: Optional[List[str]]  # Column names from SQL query result
     retries: int
     final_answer: Optional[str]
+    structured_result: Optional[List[Dict[str, Any]]]  # Structured array for BFF markdown conversion
 
 
 def load_join_graph() -> Dict[str, Any]:
@@ -127,7 +131,8 @@ Question: {state['question']}
 Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. No explanation, no markdown, no text, just the array.
 """
         logger.info(f"[PROMPT] select_tables prompt:\n{prompt}")
-        raw = self.llm.invoke(prompt).content.strip()
+        response = self.llm.invoke(prompt)
+        raw = str(response.content).strip() if hasattr(response, 'content') and response.content else ""
         logger.info(f"Raw LLM output: {raw}")
         try:
             tables = json.loads(raw)
@@ -323,7 +328,8 @@ NOTES:
 - explicitly state if using bridge tables and why
 """
         logger.info(f"[PROMPT] plan_joins prompt:\n{prompt}")
-        state["join_plan"] = self.llm.invoke(prompt).content
+        response = self.llm.invoke(prompt)
+        state["join_plan"] = str(response.content) if hasattr(response, 'content') and response.content else ""
         return state
 
     # 4) SQL Generator
@@ -397,7 +403,8 @@ you MUST include BOTH joins in your SQL. Do NOT skip the bridge table (user) and
 Return ONLY the SQL query, nothing else.
 """
         logger.info(f"[PROMPT] generate_sql prompt:\n{prompt}")
-        raw_sql = self.llm.invoke(prompt).content.strip()
+        response = self.llm.invoke(prompt)
+        raw_sql = str(response.content).strip() if hasattr(response, 'content') and response.content else ""
         if raw_sql.startswith("```"):
             lines = raw_sql.split("\n")
             raw_sql = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
@@ -498,10 +505,14 @@ Return ONLY the SQL query, nothing else.
         logger.info(f"Executing SQL: {state['sql']}")
 
         try:
-            res = sql_tool.run_query(state["sql"])
+            # Use run_query_with_columns to get both result and column names
+            res, column_names = sql_tool.run_query_with_columns(state["sql"])
+            state["column_names"] = column_names
+            logger.debug(f"Query returned {len(column_names)} columns: {column_names}")
         except Exception as e:
             # hard fail -> no retry unless you want it
             state["result"] = f"Error executing query: {e}"
+            state["column_names"] = None
             return state
 
         # Normalize "empty" – depends on SQLDatabase.run formatting
@@ -522,21 +533,162 @@ If date filters exist, ensure you're filtering on the correct table columns.
             state["join_plan"] = state["join_plan"] + "\n\n" + feedback
             # Signal to go back to SQL generation (not table selection)
             state["result"] = None
+            state["column_names"] = None
             return state
 
         state["result"] = str(res)
         return state
 
-    # 6) Final answer formatting (minimal)
+    def _parse_sql_result(self, raw_result: str, column_names: Optional[List[str]] = None) -> Optional[List[Dict[str, Any]]]:
+        """
+        Parse SQL result into structured data with proper column names.
+        
+        Handles multiple formats:
+        1. JSON arrays: [{"col1": "val1", ...}, ...]
+        2. Python tuple strings: [('val1', 'val2', ...), ...] - uses column_names if provided
+        3. Python dict strings: [{'col1': 'val1', ...}, ...]
+        
+        Args:
+            raw_result: Raw SQL result string
+            column_names: Optional list of column names from the query result
+            
+        Returns:
+            List of dictionaries with proper column names, or None if parsing fails
+        """
+        if not raw_result or not raw_result.strip():
+            return None
+        
+        result_str = str(raw_result).strip()
+        
+        # Try JSON first (most common for LangChain SQLDatabase)
+        try:
+            if result_str.startswith('[') or result_str.startswith('{'):
+                parsed = json.loads(result_str)
+                if isinstance(parsed, list):
+                    # Ensure all items are dicts
+                    structured = []
+                    for item in parsed:
+                        if isinstance(item, dict):
+                            structured.append(item)
+                        elif isinstance(item, (list, tuple)):
+                            # Convert tuple/list to dict with actual column names if available
+                            if column_names and len(column_names) == len(item):
+                                structured.append({column_names[i]: val for i, val in enumerate(item)})
+                            else:
+                                # Fallback to generic keys if column names don't match
+                                structured.append({f"col_{i}": val for i, val in enumerate(item)})
+                        else:
+                            structured.append({"value": item})
+                    return structured if structured else None
+                elif isinstance(parsed, dict):
+                    return [parsed]
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+        
+        # Try parsing Python literal (handles tuple strings like [('val1', 'val2'), ...])
+        try:
+            if result_str.startswith('['):
+                # Preprocess: replace datetime.date(...) and datetime.datetime(...) with string representation
+                preprocessed = result_str
+                
+                # Replace datetime.date(...) patterns: datetime.date(2025, 7, 16) -> '2025-07-16'
+                date_pattern = r'datetime\.date\((\d+),\s*(\d+),\s*(\d+)\)'
+                def replace_date(match):
+                    year, month, day = match.groups()
+                    return f"'{year}-{month.zfill(2)}-{day.zfill(2)}'"
+                preprocessed = re.sub(date_pattern, replace_date, preprocessed)
+                
+                # Replace datetime.datetime(...) patterns with ISO format string
+                # datetime.datetime(2025, 7, 16, 12, 30, 45) -> '2025-07-16T12:30:45'
+                datetime_pattern = r'datetime\.datetime\((\d+),\s*(\d+),\s*(\d+)(?:,\s*(\d+))?(?:,\s*(\d+))?(?:,\s*(\d+))?\)'
+                def replace_datetime(match):
+                    groups = match.groups()
+                    year, month, day = groups[0], groups[1], groups[2]
+                    hour = groups[3] if groups[3] else '0'
+                    minute = groups[4] if groups[4] else '0'
+                    second = groups[5] if groups[5] else '0'
+                    return f"'{year}-{month.zfill(2)}-{day.zfill(2)}T{hour.zfill(2)}:{minute.zfill(2)}:{second.zfill(2)}'"
+                preprocessed = re.sub(datetime_pattern, replace_datetime, preprocessed)
+                
+                # Also handle None -> None (keep as-is, but ensure it's valid Python)
+                # None is already valid in Python literals
+                
+                # Parse as Python literal
+                parsed = ast.literal_eval(preprocessed)
+                
+                if isinstance(parsed, list) and len(parsed) > 0:
+                    # Convert list of tuples to list of dicts
+                    structured = []
+                    for row in parsed:
+                        if isinstance(row, (list, tuple)):
+                            # Convert tuple/list to dict with actual column names if available
+                            row_dict = {}
+                            for i, val in enumerate(row):
+                                # Use column name if available, otherwise use generic key
+                                col_name = column_names[i] if column_names and i < len(column_names) else f"col_{i}"
+                                
+                                # Convert values to JSON-serializable types
+                                if val is None:
+                                    row_dict[col_name] = None
+                                elif isinstance(val, (str, int, float, bool)):
+                                    row_dict[col_name] = val
+                                else:
+                                    # Convert other types to string
+                                    row_dict[col_name] = str(val)
+                            structured.append(row_dict)
+                        elif isinstance(row, dict):
+                            # Already a dict, but ensure values are JSON-serializable
+                            clean_dict = {}
+                            for k, v in row.items():
+                                if v is None or isinstance(v, (str, int, float, bool, list, dict)):
+                                    clean_dict[k] = v
+                                else:
+                                    clean_dict[k] = str(v)
+                            structured.append(clean_dict)
+                        else:
+                            structured.append({"value": str(row) if row is not None else None})
+                    return structured if structured else None
+        except (ValueError, SyntaxError, TypeError) as e:
+            logger.debug(f"Failed to parse Python literal: {e}, result_str preview: {result_str[:200]}")
+            pass
+        
+        return None
+
+    # 6) Final answer formatting (structured data for BFF)
     @trace_step('finalize')
     def _finalize(self, state: SQLGraphState) -> SQLGraphState:
+        """
+        Finalize SQL result and parse structured data for BFF markdown conversion.
+        
+        Returns both raw string (for backward compatibility) and structured array
+        (for Node.js BFF to convert to markdown).
+        """
         if state.get("result") is None:
             state["final_answer"] = "No result."
+            state["structured_result"] = None
             return state
 
-        # You can optionally add a tiny "explain result" prompt if needed.
-        # For now keep pass-through (like your orchestrator finalize philosophy).
-        state["final_answer"] = state["result"]
+        raw_result = state.get("result")
+        column_names = state.get("column_names")
+        
+        # Parse structured data from various formats, using column names if available
+        if raw_result is None:
+            structured_data = None
+        else:
+            structured_data = self._parse_sql_result(raw_result, column_names)
+        
+        # Store both structured and raw for flexibility
+        state["final_answer"] = raw_result  # Raw for backward compatibility
+        state["structured_result"] = structured_data  # Structured for BFF markdown conversion
+        
+        if structured_data:
+            logger.info(f"✅ Parsed structured data: {len(structured_data)} items")
+            if len(structured_data) > 0:
+                logger.debug(f"First item keys: {list(structured_data[0].keys())}")
+        else:
+            logger.debug(f"⚠️ Could not parse structured data from result (length: {len(str(raw_result))} chars)")
+            logger.debug(f"Result preview: {str(raw_result)[:200]}...")
+        
         return state
 
     def _route_after_execute(self, state: SQLGraphState) -> str:
@@ -573,6 +725,11 @@ If date filters exist, ensure you're filtering on the correct table columns.
         return g.compile()
 
     def query(self, question: str) -> str:
+        """
+        Query the database and return the answer.
+        
+        Returns the final_answer string. For structured data, use query_with_structured().
+        """
         state: SQLGraphState = {
             "question": question,
             "tables": [],
@@ -580,8 +737,35 @@ If date filters exist, ensure you're filtering on the correct table columns.
             "join_plan": "",
             "sql": "",
             "result": None,
+            "column_names": None,
             "retries": 0,
             "final_answer": None,
+            "structured_result": None,
         }
         out = self.workflow.invoke(state)
         return out.get("final_answer") or "No answer generated."
+    
+    def query_with_structured(self, question: str) -> Dict[str, Any]:
+        """
+        Query the database and return both answer and structured data.
+        
+        Returns:
+            Dict with 'answer' (str) and 'structured_result' (List[Dict] | None)
+        """
+        state: SQLGraphState = {
+            "question": question,
+            "tables": [],
+            "allowed_relationships": [],
+            "join_plan": "",
+            "sql": "",
+            "result": None,
+            "column_names": None,
+            "retries": 0,
+            "final_answer": None,
+            "structured_result": None,
+        }
+        out = self.workflow.invoke(state)
+        return {
+            "answer": out.get("final_answer") or "No answer generated.",
+            "structured_result": out.get("structured_result")
+        }

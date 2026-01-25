@@ -8,7 +8,7 @@ This is the primary agent that routes questions to:
 Uses LangGraph to create a stateful workflow with intelligent routing.
 """
 
-from typing import Annotated, TypedDict, Dict, Any, Sequence
+from typing import Annotated, TypedDict, Dict, Any, Sequence, List
 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
@@ -26,8 +26,10 @@ class AgentState(TypedDict):
     question: str
     next_step: str
     sql_result: str | None
+    sql_structured_result: List[Dict[str, Any]] | None  # Structured array from SQL agent for BFF
     rag_result: str | None
     final_answer: str | None
+    final_structured_data: List[Dict[str, Any]] | None  # Structured data for final answer (BFF markdown)
 
 
 class OrchestratorAgent:
@@ -135,13 +137,16 @@ Respond with ONLY one word: SQL or RAG"""
         logger.info(f"Executing SQL agent for: '{question}'")
         
         try:
-            result = self.sql_agent.query(question)
-            state["sql_result"] = result
-            state["messages"].append(AIMessage(content=f"SQL Result: {result}"))
+            # Get both answer and structured data
+            result = self.sql_agent.query_with_structured(question)
+            state["sql_result"] = result["answer"]
+            state["sql_structured_result"] = result.get("structured_result")
+            state["messages"].append(AIMessage(content=f"SQL Result: {result['answer']}"))
             state["next_step"] = "finalize"
         except Exception as e:
             logger.error(f"SQL agent error: {e}")
             state["sql_result"] = f"Error: {str(e)}"
+            state["sql_structured_result"] = None
             state["next_step"] = "finalize"
         
         return state
@@ -170,15 +175,21 @@ Respond with ONLY one word: SQL or RAG"""
         
         For SQL results, we pass through the already-formatted answer with minimal LLM processing.
         This enables streaming while avoiding regeneration/duplication.
+        
+        Also preserves structured_data for BFF markdown conversion.
         """
         
         # Determine which result to use
         if state.get("sql_result"):
             raw_answer = state["sql_result"]
+            # Preserve structured data from SQL agent for BFF
+            state["final_structured_data"] = state.get("sql_structured_result")
         elif state.get("rag_result"):
             raw_answer = state["rag_result"]
+            state["final_structured_data"] = None  # RAG doesn't have structured data
         else:
             raw_answer = "I couldn't find an answer to your question."
+            state["final_structured_data"] = None
         
         # Use a minimal prompt to enable streaming without regenerating content
         # The LLM will just pass through the answer, allowing it to stream to the final channel
@@ -263,8 +274,10 @@ Respond with ONLY one word: SQL or RAG"""
             "question": question,
             "next_step": "classify",
             "sql_result": None,
+            "sql_structured_result": None,
             "rag_result": None,
-            "final_answer": None
+            "final_answer": None,
+            "final_structured_data": None
         }
         
         # Run workflow

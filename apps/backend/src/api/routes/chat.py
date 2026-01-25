@@ -52,13 +52,17 @@ async def stream_orchestrator_response(
             "question": message,
             "next_step": "classify",
             "sql_result": None,
+            "sql_structured_result": None,
             "rag_result": None,
-            "final_answer": None
+            "final_answer": None,
+            "final_structured_data": None
         }
         
         # Track statistics
         total_tokens = 0
         current_node = None
+        final_structured_data = None  # Track structured data for final answer
+        first_final_token = True  # Track if this is the first token in final channel
         
         # Stream events from the agent workflow
         async for event in agent.astream_events(initial_state, version="v1"):
@@ -88,6 +92,35 @@ async def stream_orchestrator_response(
                     yield f"data: {tool_event.model_dump_json()}\n\n"
                 elif event_name == "finalize":
                     current_node = "final"
+                    first_final_token = True  # Reset for new finalize step
+            
+            # Capture structured data from orchestrator's sql_agent node completion
+            # The sql_agent node stores structured_result in sql_structured_result
+            if event_type == "on_chain_end" and event_name == "sql_agent":
+                outputs = event.get("data", {}).get("output", {})
+                # The orchestrator's sql_agent node stores structured data here
+                sql_structured = outputs.get("sql_structured_result")
+                if sql_structured:
+                    final_structured_data = sql_structured
+                    logger.info(f"✅ Captured structured_data from sql_agent node: {len(final_structured_data)} items")
+                else:
+                    logger.debug(f"sql_agent node output keys: {list(outputs.keys())}")
+                    logger.debug(f"sql_structured_result not found in output")
+            
+            # Also capture from finalize step output (backup - should have final_structured_data)
+            if event_type == "on_chain_end" and event_name == "finalize":
+                outputs = event.get("data", {}).get("output", {})
+                # Finalize step should have final_structured_data (copied from sql_structured_result)
+                final_structured_from_finalize = outputs.get("final_structured_data")
+                if final_structured_from_finalize:
+                    if final_structured_data is None:
+                        final_structured_data = final_structured_from_finalize
+                        logger.info(f"✅ Captured structured_data from finalize step: {len(final_structured_data)} items")
+                    else:
+                        logger.debug(f"Already had structured_data from sql_agent, finalize also has {len(final_structured_from_finalize)} items")
+                else:
+                    logger.debug(f"finalize node output keys: {list(outputs.keys())}")
+                    logger.debug(f"final_structured_data not found in finalize output")
             
             # Stream content tokens
             if event_type == "on_chat_model_stream":
@@ -100,11 +133,25 @@ async def stream_orchestrator_response(
                     
                     total_tokens += 1
                     
+                    # Include structured_data in the first token of final channel
+                    # This allows BFF to convert arrays to markdown before/while streaming content
+                    structured_data_for_token = None
+                    if current_node == "final" and first_final_token:
+                        if final_structured_data is not None:
+                            # Include structured_data in the first token only
+                            structured_data_for_token = final_structured_data
+                            first_final_token = False  # Mark that we've sent it
+                            logger.info(f"✅ Including structured_data in first final token: {len(structured_data_for_token)} items")
+                        else:
+                            logger.debug(f"⚠️ First final token but no structured_data available (final_structured_data is None)")
+                            first_final_token = False  # Still mark as sent to avoid repeated warnings
+                    
                     # Emit semantic token event
                     token_event = StreamEvent(
                         event="token",
                         channel=current_node,
-                        content=chunk.content
+                        content=chunk.content,
+                        structured_data=structured_data_for_token
                     )
                     yield f"data: {token_event.model_dump_json()}\n\n"
             

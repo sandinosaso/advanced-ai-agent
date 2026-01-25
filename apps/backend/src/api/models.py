@@ -5,7 +5,7 @@ This is an internal service API - UI concepts are handled by the Node.js BFF lay
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, Literal, Dict, Any
+from typing import Optional, Literal, Dict, Any, List
 
 
 class AgentInput(BaseModel):
@@ -71,7 +71,8 @@ class StreamEvent(BaseModel):
     
     # Optional fields depending on event type
     channel: Optional[Literal["classify", "sql_agent", "rag_agent", "final"]] = None
-    content: Optional[str] = None
+    content: Optional[str] = None  # Raw content (backward compatible)
+    structured_data: Optional[List[Dict[str, Any]]] = None  # Structured array for BFF markdown conversion
     tool: Optional[str] = None
     route: Optional[Literal["sql", "rag"]] = None
     stats: Optional[Dict[str, Any]] = None
