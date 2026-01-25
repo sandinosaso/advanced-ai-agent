@@ -8,15 +8,16 @@ This is the primary agent that routes questions to:
 Uses LangGraph to create a stateful workflow with intelligent routing.
 """
 
-from typing import Annotated, Literal, TypedDict, List, Dict, Any, Sequence
+from typing import Annotated, TypedDict, Dict, Any, Sequence
 
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from loguru import logger
 
-from src.agents.sql_agent import SQLQueryAgent
+from src.agents.sql_graph_agent import SQLGraphAgent
 from src.agents.rag_agent import RAGAgent
+from src.utils.config import settings
 
 
 class AgentState(TypedDict):
@@ -53,8 +54,12 @@ class OrchestratorAgent:
             model: LLM model for routing decisions
             temperature: Generation temperature
         """
-        self.llm = ChatOpenAI(model=model, temperature=temperature)
-        self.sql_agent = SQLQueryAgent()
+        self.llm = ChatOpenAI(
+            model=model, 
+            temperature=temperature,
+            max_completion_tokens=settings.max_output_tokens
+        )
+        self.sql_agent = SQLGraphAgent()
         self.rag_agent = RAGAgent()
         
         # Build the workflow graph
@@ -163,30 +168,25 @@ Respond with ONLY one word: SQL or RAG"""
         """
         Finalize the answer and prepare for return
         
-        This node uses the LLM to present the final answer in a natural way.
-        This allows streaming of the final response to the user.
+        For SQL results, we pass through the already-formatted answer with minimal LLM processing.
+        This enables streaming while avoiding regeneration/duplication.
         """
         
         # Determine which result to use
         if state.get("sql_result"):
             raw_answer = state["sql_result"]
-            source = "SQL Database"
         elif state.get("rag_result"):
             raw_answer = state["rag_result"]
-            source = "Company Documents"
         else:
             raw_answer = "I couldn't find an answer to your question."
-            source = "None"
         
-        # Use LLM to present the final answer (this enables streaming)
-        finalize_prompt = f"""Present this answer to the user in a clear, natural way.
+        # Use a minimal prompt to enable streaming without regenerating content
+        # The LLM will just pass through the answer, allowing it to stream to the final channel
+        finalize_prompt = f"""Return the following answer exactly as provided:
 
-Source: {source}
-Answer: {raw_answer}
-
-Present the answer directly without adding "The answer is" or similar phrases."""
+{raw_answer}"""
         
-        # Call LLM to generate final answer (this will stream)
+        # Call LLM to enable streaming (this will stream to the final channel)
         final_response = self.llm.invoke(finalize_prompt)
         final_answer = final_response.content
         
@@ -327,33 +327,3 @@ Present the answer directly without adding "The answer is" or similar phrases.""
         async for event in self.workflow.astream_events(input_data, version=version):
             yield event
 
-
-if __name__ == "__main__":
-    # Test the orchestrator
-    print("\n" + "="*80)
-    print("ORCHESTRATOR AGENT - LangGraph Workflow Test")
-    print("="*80 + "\n")
-    
-    orchestrator = OrchestratorAgent()
-    
-    test_questions = [
-        # SQL questions
-        "How many technicians are in the database?",
-        "What is the total amount of approved expenses?",
-        "Which jobs are currently in progress?",
-        
-        # RAG questions
-        "What are the overtime rules?",
-        "What safety equipment is required for electrical work?",
-        "How do I submit expense reports?",
-        
-        # Mixed/ambiguous
-        "What is the company policy on working more than 8 hours?",
-    ]
-    
-    for question in test_questions:
-        print("\n" + "-"*80)
-        result = orchestrator.ask(question)
-        print(f"\nQuestion: {question}")
-        print(f"Route: {result['route'].upper()}")
-        print(f"Answer: {result['answer']}")

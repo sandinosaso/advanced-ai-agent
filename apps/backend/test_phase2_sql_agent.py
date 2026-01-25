@@ -3,7 +3,7 @@ Demo script for Phase 2: SQL Query Agent
 Tests natural language database queries using LangChain SQL agent.
 """
 
-from src.agents import SQLQueryAgent, EXAMPLE_QUERIES
+from src.agents import SQLQueryAgent
 from src.utils.logger import logger
 
 
@@ -75,9 +75,6 @@ def interactive_mode():
     logger.info("\n💬 Interactive Query Mode")
     logger.info("=" * 80)
     logger.info("Ask questions about the database (or 'quit' to exit)")
-    logger.info("\nExample questions:")
-    for example in EXAMPLE_QUERIES[:5]:
-        print(f"  • {example}")
     
     print("\n" + "=" * 80 + "\n")
     

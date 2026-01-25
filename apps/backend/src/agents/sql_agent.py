@@ -23,8 +23,54 @@ class SQLQueryAgent:
         # Create LLM for agent
         self.llm = ChatOpenAI(
             model=settings.openai_model,
-            temperature=0  # Deterministic for SQL
+            temperature=0,  # Deterministic for SQL
+            max_completion_tokens=settings.max_output_tokens  # Limit output tokens
         )
+        
+        # Agent prefix with instructions about secure views
+        agent_prefix = """You are an agent designed to interact with a SQL database.
+Given an input question, create a syntactically correct MySQL query to run, then look at the results of the query and return the answer.
+
+IMPORTANT: The database uses secure views for sensitive data. Always use these views:
+- secure_user (not user)
+- secure_customerlocation (not customerlocation)
+- secure_customercontact (not customercontact)
+- secure_employee (not employee)
+- secure_workorder (not workorder)
+- secure_customer (not customer)
+
+These secure views have encryption already handled and will return readable data.
+
+IMPORTANT: Always use LIMIT clauses to prevent large result sets:
+- Use LIMIT {max_rows} at the end of SELECT queries
+- Default to LIMIT 100 unless user specifies a different amount
+- For counts/aggregates, no LIMIT needed
+
+CRITICAL - Keep queries simple and avoid unnecessary joins:
+- The workTime table contains: employeeId, startTime, endTime, hours, crewWorkDayId
+- When filtering workTime by date, use w.startTime or w.endTime (NOT work order dates)
+- Only join to secure_workorder if you need work order specific info (customer, location, status)
+- crewWorkDayId links to crewWorkDay table, NOT to work order IDs
+
+Common query patterns:
+1. Employee hours by period:
+   SELECT e.firstName, e.lastName, SUM(w.hours)
+   FROM workTime w
+   JOIN secure_employee e ON w.employeeId = e.id
+   WHERE w.startTime BETWEEN 'start' AND 'end'
+   GROUP BY e.id
+
+2. Work orders with employee info:
+   SELECT wo.*, e.firstName
+   FROM secure_workorder wo
+   JOIN secure_employee e ON wo.employeeId = e.id
+   WHERE wo.startDate BETWEEN 'start' AND 'end'
+
+3. Customer work orders:
+   SELECT c.customerName, wo.workOrderNumber
+   FROM secure_customer c
+   JOIN secure_workorder wo ON c.id = wo.customerId
+""".format(max_rows=settings.max_query_rows)
         
         # Create SQL agent with toolkit
         self.agent = create_sql_agent(
@@ -32,7 +78,9 @@ class SQLQueryAgent:
             toolkit=sql_tool.get_toolkit(),
             agent_type="openai-tools",  # Modern agent type for OpenAI models
             verbose=True,  # Show reasoning steps
-            handle_parsing_errors=True
+            handle_parsing_errors=True,
+            prefix=agent_prefix,  # Add custom instructions
+            max_iterations=settings.sql_agent_max_iterations  # Limit reasoning steps
         )
         
         logger.info("SQL Query Agent initialized")
@@ -77,18 +125,3 @@ class SQLQueryAgent:
             String describing the database schema
         """
         return sql_tool.get_table_info()
-
-
-# Example usage and common queries
-EXAMPLE_QUERIES = [
-    "How many technicians are active?",
-    "How many hours did technicians work last week?",
-    "Which jobs are over budget?",
-    "Show me all pending work logs",
-    "What are the most common skills among technicians?",
-    "How many jobs are in progress?",
-    "What is the total amount of approved expenses?",
-    "Which technicians logged more than 40 hours in a week?",
-    "List all schedule rules with error severity",
-    "What is the average hourly rate for full-time technicians?"
-]

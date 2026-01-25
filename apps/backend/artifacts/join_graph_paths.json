@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "metadata": {
+    "total_tables": 122,
+    "total_relationships": 1801,
+    "high_confidence_relationships": 1801,
+    "confidence_threshold": 0.7,
+    "max_hops": 4,
+    "path_finder_class": "JoinPathFinder",
+    "path_finder_module": "src.utils.path_finder"
+  },
+  "note": "This index enables on-demand path finding. Use JoinPathFinder.find_shortest_path() to compute paths between selected tables. Paths are computed using Dijkstra's algorithm for efficiency."
+}

@@ -1,0 +1,35 @@
+{
+    "version": 1,
+    "relationships": [
+        {
+            "from_table": "workOrder",
+            "from_column": "id",
+            "to_table": "crew",
+            "to_column": "workOrderId",
+            "type": "manual",
+            "confidence": 1.0,
+            "cardinality": "1:N",
+            "evidence": {"note": "manual business-critical join"}
+        },
+        {
+            "from_table": "crew",
+            "from_column": "id",
+            "to_table": "employeeCrew",
+            "to_column": "crewId",
+            "type": "manual",
+            "confidence": 1.0,
+            "cardinality": "1:N",
+            "evidence": {"note": "manual business-critical join"}
+        },
+        {
+            "from_table": "employeeCrew",
+            "from_column": "employeeId",
+            "to_table": "employee",
+            "to_column": "id",
+            "type": "manual",
+            "confidence": 1.0,
+            "cardinality": "N:1",
+            "evidence": {"note": "manual business-critical join"}
+        }
+    ]
+}

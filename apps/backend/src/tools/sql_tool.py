@@ -1,41 +1,57 @@
 """
-SQL database tool for querying the FSIA database.
+SQL database tool for querying the database.
 Provides safe, read-only access to database through natural language.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Set
 from sqlalchemy import create_engine, inspect
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_openai import ChatOpenAI
 
-from ..models.database import DATABASE_URL
+from ..models.database import get_database
 from ..utils.config import settings
 from ..utils.logger import logger
+from ..sql.secure_views import SECURE_VIEW_MAP, rewrite_secure_tables, validate_tables_exist
 
 
-class FSIASQLTool:
+class SQLQueryTool:
     """
-    SQL query tool for Field Service Intelligence Agent database.
+    SQL query tool for database access.
     Provides safe, read-only access to the database.
     """
     
     def __init__(self):
         """Initialize SQL database connection and toolkit."""
-        # Create SQLAlchemy engine for LangChain
-        self.engine = create_engine(DATABASE_URL)
+        # Get database instance
+        db_instance = get_database()
+        self.engine = db_instance.engine
+        
+        # Exclude encrypted base tables - we'll use secure views via rewriting
+        # Only the base tables that have secure views should be excluded
+        excluded_tables = list(SECURE_VIEW_MAP.keys())
+        
+        logger.info(f"Excluding encrypted base tables: {', '.join(excluded_tables)}")
+        logger.info(f"These will be accessed via: {', '.join(SECURE_VIEW_MAP.values())}")
         
         # Create LangChain SQL Database wrapper
         self.db = SQLDatabase(
             engine=self.engine,
-            include_tables=["technicians", "jobs", "work_logs", "expenses", "schedule_rules"],
-            sample_rows_in_table_info=3  # Include sample rows in schema for better context
+            ignore_tables=excluded_tables,  # Exclude encrypted base tables
+            view_support=True,  # Include views in the schema
+            sample_rows_in_table_info=settings.sql_sample_rows,  # Configurable sample rows
+            max_string_length=100  # Truncate long string values
         )
+        
+        # Cache available tables for validation
+        self._available_tables = set(self.db.get_usable_table_names())
+        logger.info(f"Available tables/views: {len(self._available_tables)}")
         
         # Initialize LLM for SQL agent
         self.llm = ChatOpenAI(
             model=settings.openai_model,
-            temperature=0  # Deterministic for SQL generation
+            temperature=0,  # Deterministic for SQL generation
+            max_completion_tokens=settings.max_output_tokens  # Limit output tokens
         )
         
         # Create SQL toolkit
@@ -64,9 +80,24 @@ class FSIASQLTool:
         """
         return list(self.db.get_usable_table_names())
     
+    def get_available_tables(self) -> Set[str]:
+        """
+        Get set of available table names for validation.
+        
+        Returns:
+            Set of table names (lowercase)
+        """
+        return self._available_tables
+    
     def run_query(self, query: str) -> str:
         """
-        Execute a SQL query (read-only).
+        Execute a SQL query (read-only) with automatic secure view rewriting.
+        
+        This method:
+        1. Validates the query is read-only
+        2. Rewrites base table names to secure views where applicable
+        3. Validates all tables exist
+        4. Executes the query
         
         Args:
             query: SQL SELECT query to execute
@@ -75,7 +106,7 @@ class FSIASQLTool:
             Query results as string
             
         Raises:
-            ValueError: If query contains forbidden operations
+            ValueError: If query contains forbidden operations or invalid tables
         """
         # Safety check: only allow SELECT queries
         query_upper = query.strip().upper()
@@ -88,14 +119,30 @@ class FSIASQLTool:
                     "Only SELECT queries are allowed for safety."
                 )
         
-        logger.info(f"Executing SQL query: {query[:100]}...")
+        logger.info(f"Original SQL: {query[:200]}...")
         
+        # Rewrite base tables to secure views (e.g., employee → secure_employee)
+        rewritten_query = rewrite_secure_tables(query)
+        
+        # Log if rewrite happened
+        if rewritten_query != query:
+            logger.info(f"Rewritten SQL: {rewritten_query[:200]}...")
+        
+        # Validate all tables exist
         try:
-            result = self.db.run(query)
+            validate_tables_exist(rewritten_query, self._available_tables)
+        except ValueError as e:
+            logger.error(f"Table validation failed: {e}")
+            raise
+        
+        # Execute the query
+        try:
+            result = self.db.run(rewritten_query)
             logger.success(f"Query executed successfully, returned {len(str(result))} characters")
             return str(result)
         except Exception as e:
             logger.error(f"Query execution failed: {e}")
+            logger.error(f"Failed query: {rewritten_query}")
             raise
     
     def get_toolkit(self) -> SQLDatabaseToolkit:
@@ -108,8 +155,8 @@ class FSIASQLTool:
         return self.toolkit
     
     def __repr__(self) -> str:
-        return f"<FSIASQLTool tables={self.get_table_names()}>"
+        return f"<SQLQueryTool tables={self.get_table_names()}>"
 
 
 # Create global instance
-sql_tool = FSIASQLTool()
+sql_tool = SQLQueryTool()
