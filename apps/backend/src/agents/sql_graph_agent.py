@@ -233,15 +233,53 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
                 path = self.path_finder.find_shortest_path(table1, table2, max_hops=4)
                 if path:
                     path_desc = self.path_finder.get_path_description(path)
+                    # Extract all tables in the path (including bridge tables)
+                    tables_in_path = set()
+                    for rel in path:
+                        tables_in_path.add(rel['from_table'])
+                        tables_in_path.add(rel['to_table'])
+                    
                     suggested_paths.append({
                         "from": table1,
                         "to": table2,
                         "path": path_desc,
-                        "hops": len(path)
+                        "hops": len(path),
+                        "tables_used": sorted(tables_in_path),  # Include bridge tables
+                        "join_steps": [
+                            f"{rel['from_table']}.{rel['from_column']} = {rel['to_table']}.{rel['to_column']}"
+                            for rel in path
+                        ]
                     })
         
         # Format relationships for prompt (limit to avoid token bloat)
         rels_display = allowed_rels[:50]  # Limit to first 50 for prompt size
+        
+        # Find the most relevant suggested path for connecting crew to employee
+        crew_to_employee_path = None
+        for path_info in suggested_paths:
+            if (path_info['from'] == 'crew' and path_info['to'] == 'employee') or \
+               (path_info['from'] == 'employee' and path_info['to'] == 'crew'):
+                crew_to_employee_path = path_info
+                break
+        
+        # Build the most relevant path section
+        relevant_path_section = ""
+        if crew_to_employee_path:
+            relevant_path_section = f"""
+{"=" * 70}
+MOST RELEVANT PATH FOR THIS QUESTION:
+{"=" * 70}
+To connect crew to employee, use this EXACT path from the suggestions above:
+
+  Path: {crew_to_employee_path['path']}
+  Tables needed: {', '.join(crew_to_employee_path['tables_used'])}
+  
+  JOIN_PATH steps (copy these EXACTLY):
+{chr(10).join(f"  - {step}" for step in crew_to_employee_path['join_steps'])}
+  
+  DO NOT create your own path - use the one above!
+{"=" * 70}
+"""
         
         prompt = f"""
 You are planning SQL joins. You MUST ONLY use the allowed relationships.
@@ -249,17 +287,27 @@ You are planning SQL joins. You MUST ONLY use the allowed relationships.
 Selected tables:
 {selected_tables}
 
-Direct and transitive relationships available (use only these):
-{json.dumps(rels_display, indent=2)}
+{"=" * 70}
+CRITICAL: USE THE SUGGESTED PATHS BELOW - THEY ARE COMPUTED BY THE GRAPH ALGORITHM
+{"=" * 70}
 
 Suggested optimal paths (from graph algorithm):
+These paths are computed by the graph algorithm and include ALL bridge tables needed.
 {json.dumps(suggested_paths, indent=2) if suggested_paths else "No paths found"}
 
+{relevant_path_section}
+
+Direct and transitive relationships available (for reference only - prefer suggested paths):
+{json.dumps(rels_display[:20], indent=2)}  # Limited to avoid confusion
+
 Task:
-- Propose the minimal join path(s) needed for the question.
-- Prefer shorter paths (fewer hops) when multiple options exist.
-- Use cardinality to prefer safer joins (N:1 / 1:1 over N:N).
-- You can use the suggested paths above, or construct your own from allowed relationships.
+- PRIMARY: Use the suggested paths above - they are computed by the graph algorithm and are correct
+- If a suggested path exists for the tables you need to connect, USE IT EXACTLY as shown
+- Only construct your own path if no suggested path exists
+- Prefer shorter paths (fewer hops) when multiple options exist
+- Use cardinality to prefer safer joins (N:1 / 1:1 over N:N)
+- CRITICAL: If connecting two tables requires a bridge table (like 'user' connecting 'crew' to 'employee'), 
+  you MUST include ALL intermediate tables in the JOIN_PATH. Do NOT skip bridge tables.
 - If no allowed join path exists, say "NO_JOIN_PATH".
 
 Question: {state['question']}
@@ -267,10 +315,12 @@ Question: {state['question']}
 Output format:
 JOIN_PATH:
 - tableA.col = tableB.col (cardinality, confidence)
+- tableB.col = tableC.col (cardinality, confidence)  # if bridge table needed
 - ...
 
 NOTES:
 - brief reasoning about path choice
+- explicitly state if using bridge tables and why
 """
         logger.info(f"[PROMPT] plan_joins prompt:\n{prompt}")
         state["join_plan"] = self.llm.invoke(prompt).content
@@ -290,32 +340,59 @@ NOTES:
         - Rewriting is deterministic and based on SECURE_VIEW_MAP
         - No more secure_inspections errors
         """
+        # Extract all tables mentioned in the join plan (including bridge tables)
+        join_plan_text = state.get('join_plan', '')
+        tables_from_join_plan = self._extract_tables_from_join_plan(join_plan_text)
+        
+        # Combine selected tables with tables from join plan (bridge tables)
+        # This gives us ALL tables that will be used in the query
+        all_tables = set(state["tables"]) | tables_from_join_plan
+        
+        # Build table schemas for ALL tables (selected + bridge) with their actual columns
+        # This ensures the LLM knows exactly what columns are available in each table
         table_schemas = []
-        for table_name in state["tables"]:
+        for table_name in sorted(all_tables):
             if table_name in self.join_graph["tables"]:
                 columns = self.join_graph["tables"][table_name].get("columns", [])
-                table_schemas.append(f"{table_name}: {', '.join(columns[:20])}")
+                # Show all columns (or at least more than 20) so LLM has complete information
+                columns_str = ', '.join(columns[:50])  # Increased limit for completeness
+                if len(columns) > 50:
+                    columns_str += f" ... ({len(columns)} total columns)"
+                table_schemas.append(f"{table_name}: {columns_str}")
+            else:
+                # Log warning if table not found in join graph
+                logger.warning(f"Table '{table_name}' mentioned in join plan but not found in join graph")
+        
         schema_context = "\n".join(table_schemas)
 
+        # Parse JOIN_PATH to extract explicit join steps
+        join_path_steps = self._parse_join_path_steps(state.get('join_plan', ''))
+        
         prompt = f"""
 Generate a MySQL SELECT query using ONLY the columns shown below.
 
-Table schemas (ACTUAL columns - use these exact names):
+All tables needed for this query (with their actual columns):
 {schema_context}
 
-Rules:
-- Use ONLY columns listed above (do NOT use snake_case like start_date, use startTime)
-- Use ONLY joins explicitly listed in JOIN_PATH
+CRITICAL RULES:
+- Use ONLY the columns listed above for each table - do NOT guess or invent column names
+- Follow the JOIN_PATH EXACTLY step by step - do NOT skip any tables or steps
+- Include ALL tables shown above in your FROM/JOIN clauses
+- Do NOT try to join tables directly if JOIN_PATH shows they require a bridge table
+- Do NOT assume columns exist in the wrong table (e.g., firstName/lastName are in employee table, NOT in crew table)
 - Use LIMIT {settings.max_query_rows} unless it's an aggregate COUNT/SUM/etc
-- Keep it simple (minimal joins)
 - Use logical table names (workOrder not secure_workorder)
 - DO NOT add secure_ prefix - the system handles that automatically
 
 Question: {state['question']}
 
-Selected tables: {state['tables']}
+Join plan (follow this EXACTLY, step by step):
+{state['join_plan']}
 
-Join plan: {state['join_plan']}
+{"EXPLICIT JOIN STEPS (follow these in order):" + chr(10) + chr(10).join(f"{i+1}. {step}" for i, step in enumerate(join_path_steps)) if join_path_steps else ""}
+
+IMPORTANT: If JOIN_PATH shows multiple steps (e.g., crew.createdBy = user.id, then user.employeeId = employee.id), 
+you MUST include BOTH joins in your SQL. Do NOT skip the bridge table (user) and try to join crew directly to employee.
 
 Return ONLY the SQL query, nothing else.
 """
@@ -329,6 +406,91 @@ Return ONLY the SQL query, nothing else.
         logger.info(f"Rewritten SQL (after secure view conversion): {rewritten_sql}")
         state["sql"] = rewritten_sql
         return state
+    
+    def _extract_tables_from_join_plan(self, join_plan: str) -> set:
+        """
+        Extract table names mentioned in the join plan.
+        
+        This includes bridge tables that weren't in the initial selection
+        but are needed for the joins (e.g., 'user' table connecting crew to employee).
+        
+        Only extracts from the JOIN_PATH section to avoid matching explanatory text.
+        
+        Args:
+            join_plan: The join plan text from _plan_joins
+            
+        Returns:
+            Set of table names mentioned in the join plan
+        """
+        import re
+        tables = set()
+        
+        # First, extract only the JOIN_PATH section to avoid matching explanatory text
+        join_path_match = re.search(r'JOIN_PATH:.*?(?=NOTES:|$)', join_plan, re.IGNORECASE | re.DOTALL)
+        if not join_path_match:
+            # Fallback: look for lines starting with "-" (bullet points in JOIN_PATH)
+            join_path_match = re.search(r'(?:JOIN_PATH:.*?)?(-.*?)(?=NOTES:|$)', join_plan, re.IGNORECASE | re.DOTALL)
+        
+        join_path_text = join_path_match.group(0) if join_path_match else join_plan
+        
+        # Pattern to match table names in JOIN_PATH format:
+        # - tableA.col = tableB.col
+        # - tableA.col = tableB.col (cardinality, confidence)
+        # Only match in lines that look like join specifications (start with - or contain =)
+        pattern = r'(?:^|\n)\s*[-•]\s*([a-zA-Z_][a-zA-Z0-9_]*)\.[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*([a-zA-Z_][a-zA-Z0-9_]*)\.[a-zA-Z_][a-zA-Z0-9_]*'
+        
+        matches = re.finditer(pattern, join_path_text, re.IGNORECASE | re.MULTILINE)
+        for match in matches:
+            table1 = match.group(1)
+            table2 = match.group(2)
+            # Only add if they look like valid table names (not common words)
+            if table1.lower() not in ['the', 'a', 'an', 'and', 'or', 'path', 'connects', 'joins']:
+                tables.add(table1)
+            if table2.lower() not in ['the', 'a', 'an', 'and', 'or', 'path', 'connects', 'joins']:
+                tables.add(table2)
+        
+        # Validate against known tables in join graph
+        valid_tables = set()
+        for table in tables:
+            if table in self.join_graph["tables"]:
+                valid_tables.add(table)
+            # Also check case-insensitive
+            for known_table in self.join_graph["tables"].keys():
+                if table.lower() == known_table.lower():
+                    valid_tables.add(known_table)
+                    break
+        
+        return valid_tables
+    
+    def _parse_join_path_steps(self, join_plan: str) -> List[str]:
+        """
+        Parse JOIN_PATH section to extract explicit join steps.
+        
+        Returns a list of join steps in order, e.g.:
+        ["crew.createdBy = user.id", "user.employeeId = employee.id"]
+        
+        This helps the SQL generator follow the path exactly.
+        """
+        import re
+        steps = []
+        
+        # Extract JOIN_PATH section
+        join_path_match = re.search(r'JOIN_PATH:.*?(?=NOTES:|$)', join_plan, re.IGNORECASE | re.DOTALL)
+        if not join_path_match:
+            return steps
+        
+        join_path_text = join_path_match.group(0)
+        
+        # Pattern to match join steps: - tableA.col = tableB.col
+        pattern = r'[-•]\s*([a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*([a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*)'
+        
+        matches = re.finditer(pattern, join_path_text, re.IGNORECASE)
+        for match in matches:
+            left_side = match.group(1)
+            right_side = match.group(2)
+            steps.append(f"{left_side} = {right_side}")
+        
+        return steps
 
     # 5) Execution + Validator (retry-on-empty)
     @trace_step('execute_and_validate')

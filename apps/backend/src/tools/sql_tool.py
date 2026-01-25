@@ -3,6 +3,7 @@ SQL database tool for querying the database.
 Provides safe, read-only access to database through natural language.
 """
 
+import re
 from typing import List, Optional, Set
 from sqlalchemy import create_engine, inspect
 from langchain_community.utilities import SQLDatabase
@@ -110,10 +111,24 @@ class SQLQueryTool:
         """
         # Safety check: only allow SELECT queries
         query_upper = query.strip().upper()
+        
+        # First, ensure query starts with SELECT (allows WITH clauses for CTEs)
+        if not query_upper.startswith(("SELECT", "WITH")):
+            raise ValueError(
+                "Query must start with SELECT or WITH. "
+                "Only SELECT queries are allowed for safety."
+            )
+        
+        # Use word boundaries to avoid false positives (e.g., "createdBy" contains "CREATE")
+        # Check for forbidden keywords as standalone words, not substrings
         forbidden_keywords = ["INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE"]
         
         for keyword in forbidden_keywords:
-            if keyword in query_upper:
+            # Use word boundary regex to match only standalone keywords, not substrings
+            # \b matches word boundaries (start/end of word, before/after non-word chars)
+            # This prevents matching "CREATE" inside "createdBy" or "createdAt"
+            pattern = r'\b' + re.escape(keyword) + r'\b'
+            if re.search(pattern, query_upper, re.IGNORECASE):
                 raise ValueError(
                     f"Query contains forbidden keyword '{keyword}'. "
                     "Only SELECT queries are allowed for safety."
