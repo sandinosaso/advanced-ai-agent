@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     sql_agent_max_iterations: int = Field(default=15)
     sql_sample_rows: int = Field(default=1)
     sql_max_tables_in_context: int = Field(default=20)
+    sql_correction_max_attempts: int = Field(default=3)  # Max correction attempts
+    sql_pre_validation_enabled: bool = Field(default=True)  # Enable pre-execution validation
     
     # Token Limits
     max_context_tokens: int = Field(default=120000)

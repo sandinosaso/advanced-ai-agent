@@ -86,12 +86,18 @@ graph LR
     D --> E[Join Planner]
     E --> F[SQL Generator]
     F --> G[Secure Rewriter]
-    G --> H[Validator]
-    H --> I[Executor]
-    I --> J[Result]
+    G --> H[Pre-Validation]
+    H -->|Valid| I[Executor]
+    H -->|Invalid| J[Correction Agent]
+    J --> H
+    I -->|Success| K[Result]
+    I -->|Error| J
+    I -->|Empty| F
     
     style D fill:#FFD700
     style G fill:#FF6B6B
+    style H fill:#FFA500
+    style J fill:#FF1493
 ```
 
 **Key Features**:
@@ -99,7 +105,9 @@ graph LR
 - **Path Finding**: Uses Dijkstra's algorithm to find shortest join paths
 - **Join Planning**: Discovers transitive paths (multi-hop joins)
 - **Secure Views**: Automatic rewriting of encrypted tables
-- **Validation**: Pre-execution table validation prevents hallucinations
+- **Pre-Validation**: Pre-execution column/join validation prevents errors
+- **Error Correction**: Iterative SQL correction agent with focused context
+- **Re-Validation**: Corrected SQL automatically re-validated before execution
 
 **State Schema**:
 ```python
@@ -110,8 +118,14 @@ class SQLGraphState(TypedDict):
     join_plan: str
     sql: str
     result: Optional[str]
+    column_names: Optional[List[str]]
     retries: int
     final_answer: Optional[str]
+    structured_result: Optional[List[Dict]]
+    sql_correction_attempts: int
+    last_sql_error: Optional[str]
+    correction_history: Optional[List[Dict]]
+    validation_errors: Optional[List[str]]
 ```
 
 ### 3. RAG Agent
@@ -204,6 +218,108 @@ path = path_finder.find_shortest_path("employee", "customer", max_hops=4)
 - **Before**: Exponential complexity (never finished)
 - **After**: O((V + E) log V) - < 100ms per query
 - **Caching**: O(1) for repeated paths
+
+## SQL Error Correction System
+
+The system includes a robust error correction mechanism that handles SQL generation errors through pre-validation and iterative correction.
+
+### Correction Flow
+
+```mermaid
+stateDiagram-v2
+    [*] --> GenerateSQL
+    GenerateSQL --> PreValidate
+    PreValidate -->|Valid| Execute
+    PreValidate -->|Invalid| CorrectSQL
+    Execute -->|Success| Finalize
+    Execute -->|Error| CorrectSQL
+    Execute -->|Empty| GenerateSQL
+    CorrectSQL --> PreValidate
+    PreValidate -->|Max Attempts| Finalize
+    Finalize --> [*]
+    
+    note right of PreValidate
+        Validates columns exist
+        in their tables
+        Checks join columns
+    end note
+    
+    note right of CorrectSQL
+        Focused agent with
+        minimal context
+        Only relevant tables
+        and relationships
+    end note
+```
+
+### Pre-Execution Validation
+
+**Purpose**: Catch column and join errors before database execution.
+
+**Checks**:
+- Column names exist in their respective tables
+- `table.column` references are valid
+- Join columns exist in the tables being joined
+
+**Implementation**:
+- Extracts all `table.column` references using regex
+- Validates against join graph schemas
+- Provides specific error messages with suggestions
+
+**Example Error**:
+```
+Column 'crew.isLead' does NOT exist in table 'crew'. 
+Found in: employeeCrew. 
+Available columns in crew: id, workOrderId, createdBy, ...
+```
+
+### Correction Agent
+
+**Purpose**: Focused agent that fixes SQL errors with minimal context.
+
+**Input Context** (minimal, focused):
+- Original question
+- Failed SQL query
+- Specific error message
+- Relevant table schemas (only tables used in query)
+- Relevant relationships (only relationships between used tables)
+- Correction history (previous attempts)
+
+**Iteration Logic**:
+- Tracks attempts in `sql_correction_attempts`
+- Max attempts: 3 (configurable via `sql_correction_max_attempts`)
+- Each attempt includes previous error and correction history
+- If max attempts reached, returns error to main flow
+
+**Correction Patterns Handled**:
+1. **Wrong Column in Table**: `crew.isLead` → `employeeCrew.isLead`
+2. **Wrong Column Name**: `inspectionQuestion.inspectionId` → correct column
+3. **Wrong Join Direction**: Reverses join or uses different join columns
+
+### Re-Validation Loop
+
+After correction, SQL automatically goes through validation again:
+1. Correction agent fixes SQL
+2. Corrected SQL routed back to pre-validation
+3. If valid → execute
+4. If invalid → correct again (if attempts < max)
+5. Prevents infinite loops with attempt tracking
+
+### Configuration
+
+**Location**: `src/utils/config.py`
+
+```python
+sql_correction_max_attempts: int = 3  # Max correction attempts
+sql_pre_validation_enabled: bool = True  # Enable pre-execution validation
+```
+
+### Benefits
+
+1. **Pre-validation catches errors early** - No database round-trip for obvious errors
+2. **Focused correction agent** - Smaller context, faster, more reliable
+3. **Iterative improvement** - Each attempt learns from previous errors
+4. **Maintains main flow** - Correction is transparent to orchestrator
 
 ## Secure Views Architecture
 
@@ -358,6 +474,8 @@ sequenceDiagram
     participant PathFinder
     participant SQLGen
     participant Rewriter
+    participant Validator
+    participant Corrector
     participant MySQL
     
     User->>Orchestrator: "Show employees who worked >20h"
@@ -369,8 +487,31 @@ sequenceDiagram
     SQLGen-->>SQLAgent: SELECT e.* FROM employee e...
     SQLAgent->>Rewriter: Rewrite secure tables
     Rewriter-->>SQLAgent: SELECT e.* FROM secure_employee e...
-    SQLAgent->>MySQL: Execute query
-    MySQL-->>SQLAgent: Results
+    SQLAgent->>Validator: Pre-validate SQL
+    
+    alt Validation Passes
+        Validator-->>SQLAgent: Valid
+        SQLAgent->>MySQL: Execute query
+        MySQL-->>SQLAgent: Results
+    else Validation Fails
+        Validator-->>SQLAgent: Invalid: Column error
+        SQLAgent->>Corrector: Fix SQL with error context
+        Corrector-->>SQLAgent: Corrected SQL
+        SQLAgent->>Validator: Re-validate corrected SQL
+        Validator-->>SQLAgent: Valid
+        SQLAgent->>MySQL: Execute query
+        MySQL-->>SQLAgent: Results
+    else Execution Error
+        SQLAgent->>MySQL: Execute query
+        MySQL-->>SQLAgent: Error: Unknown column
+        SQLAgent->>Corrector: Fix SQL with error context
+        Corrector-->>SQLAgent: Corrected SQL
+        SQLAgent->>Validator: Re-validate corrected SQL
+        Validator-->>SQLAgent: Valid
+        SQLAgent->>MySQL: Execute query
+        MySQL-->>SQLAgent: Results
+    end
+    
     SQLAgent-->>Orchestrator: "10 employees worked >20h"
     Orchestrator-->>User: Final answer
 ```
@@ -458,8 +599,11 @@ graph LR
 | Table Selection | 1-2s | LLM call |
 | Path Finding | <100ms | Dijkstra algorithm |
 | SQL Generation | 1-2s | LLM call |
+| Pre-Validation | <50ms | Column/join checks |
+| SQL Correction | 1-2s | LLM call (if needed) |
 | Query Execution | 0.5-5s | Depends on query |
-| **Total** | **3-10s** | End-to-end |
+| **Total** | **3-10s** | End-to-end (no errors) |
+| **With Correction** | **5-15s** | 1-3 correction attempts |
 
 ### RAG Agent Performance
 
@@ -537,6 +681,14 @@ graph LR
 **How**: Compute paths only for selected tables using Dijkstra.
 
 **Benefit**: Efficient, scalable, cached.
+
+### 5. Hybrid Error Correction System
+
+**Why**: LLMs sometimes generate SQL with wrong columns or joins, causing execution failures.
+
+**How**: Pre-execution validation + focused correction agent with iterative retry.
+
+**Benefit**: Self-healing SQL generation, reduces manual intervention, improves reliability.
 
 ## Future Enhancements
 

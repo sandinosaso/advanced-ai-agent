@@ -39,6 +39,10 @@ class SQLGraphState(TypedDict):
     retries: int
     final_answer: Optional[str]
     structured_result: Optional[List[Dict[str, Any]]]  # Structured array for BFF markdown conversion
+    sql_correction_attempts: int  # Track correction attempts
+    last_sql_error: Optional[str]  # Store last SQL error message
+    correction_history: Optional[List[Dict[str, Any]]]  # Track correction attempts
+    validation_errors: Optional[List[str]]  # Pre-execution validation errors
 
 
 def load_join_graph() -> Dict[str, Any]:
@@ -115,10 +119,10 @@ class SQLGraphAgent:
         all_tables = list(self.join_graph["tables"].keys())
 
         prompt = f"""
-Select ONLY the minimal set of tables needed to answer the question.
+Select the set of tables needed to answer the question.
 
 Rules:
-- Return 3 to 8 tables only
+- Return 5 to 10 tables (prefer more tables than fewer to ensure all needed data is available)
 - Select from ACTUAL available tables (join graph reflects reality)
 - If unsure, return fewer tables
 - DO NOT invent table names that don't exist
@@ -199,6 +203,14 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
             f"Expanded to {len(expanded_relationships)} relationships "
             f"(added {len(expanded_relationships) - len(direct_relationships)} transitive paths)"
         )
+        
+        # Automatically add bridge tables that connect two selected tables with high confidence
+        # This ensures we include tables like employeeCrew when both crew and employee are selected
+        bridge_tables = self._find_bridge_tables(selected, rels, confidence_threshold=0.9)
+        if bridge_tables:
+            logger.info(f"Auto-adding {len(bridge_tables)} bridge tables: {bridge_tables}")
+            selected.update(bridge_tables)
+            state["tables"] = list(selected)  # Update state with bridge tables
 
         # Log some example paths for debugging
         if len(expanded_relationships) > len(direct_relationships):
@@ -414,6 +426,141 @@ Return ONLY the SQL query, nothing else.
         state["sql"] = rewritten_sql
         return state
     
+    # Pre-execution SQL Validation
+    @trace_step('validate_sql')
+    def _validate_sql_before_execution(self, state: SQLGraphState) -> SQLGraphState:
+        """
+        Validate SQL before execution to catch column/join errors early.
+        
+        Checks:
+        - Column names exist in their respective tables
+        - Table.column references are valid
+        - Join columns exist in the tables being joined
+        """
+        if not settings.sql_pre_validation_enabled:
+            state["validation_errors"] = None
+            return state
+        
+        sql = state.get("sql", "")
+        if not sql:
+            state["validation_errors"] = None
+            return state
+        
+        errors = []
+        
+        # Extract all table.column references from SQL
+        # Pattern matches: table.column in SELECT, WHERE, JOIN, ON, etc.
+        import re
+        pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b'
+        matches = re.findall(pattern, sql)
+        
+        # Get all tables that might be used (from state and join plan)
+        all_tables = set(state.get("tables", []))
+        join_plan_text = state.get("join_plan", "")
+        tables_from_join_plan = self._extract_tables_from_join_plan(join_plan_text)
+        all_tables.update(tables_from_join_plan)
+        
+        # Create mapping of table names (handle secure views)
+        table_name_map = {t.lower(): t for t in self.join_graph["tables"].keys()}
+        
+        for table_name, column_name in matches:
+            # Handle secure views (remove secure_ prefix for lookup)
+            base_table = table_name.replace('secure_', '')
+            check_table = base_table if table_name.startswith('secure_') else table_name
+            
+            # Check if table exists in join graph
+            if check_table.lower() in table_name_map:
+                actual_table = table_name_map[check_table.lower()]
+                if actual_table in self.join_graph["tables"]:
+                    columns = self.join_graph["tables"][actual_table].get("columns", [])
+                    if column_name not in columns:
+                        # Column doesn't exist - find where it might be
+                        possible_tables = []
+                        for t in all_tables:
+                            if t in self.join_graph["tables"]:
+                                t_columns = self.join_graph["tables"][t].get("columns", [])
+                                if column_name in t_columns:
+                                    possible_tables.append(t)
+                        
+                        if possible_tables:
+                            error_msg = (
+                                f"Column '{column_name}' does NOT exist in table '{check_table}'. "
+                                f"Found in: {', '.join(possible_tables)}. "
+                                f"Available columns in {check_table}: {', '.join(columns[:100])}"
+                            )
+                        else:
+                            error_msg = (
+                                f"Column '{column_name}' does NOT exist in table '{check_table}'. "
+                                f"Available columns: {', '.join(columns[:100])}"
+                            )
+                        errors.append(error_msg)
+                        logger.warning(f"Validation error: {error_msg}")
+        
+        if errors:
+            state["validation_errors"] = errors
+            logger.error(f"SQL validation failed with {len(errors)} errors")
+        else:
+            state["validation_errors"] = None
+            logger.debug("SQL validation passed")
+        
+        return state
+    
+    def _find_bridge_tables(self, selected_tables: set, relationships: List[Dict[str, Any]], confidence_threshold: float = 0.9) -> set:
+        """
+        Find bridge tables that connect two selected tables with high confidence.
+        
+        A bridge table is one that:
+        1. Has foreign keys to at least 2 selected tables
+        2. Has confidence >= threshold for those relationships
+        3. Is not already in the selected tables
+        
+        This ensures we include tables like employeeCrew when both crew and employee are selected.
+        """
+        bridge_tables = set()
+        selected_lower = {t.lower() for t in selected_tables}
+        
+        # Create a mapping of original table names (case-sensitive) to lowercase
+        table_name_map = {t.lower(): t for t in self.join_graph["tables"].keys()}
+        
+        # Count how many selected tables each potential bridge table connects to
+        table_connections = {}  # table_name_lower -> set of selected tables (original case) it connects to
+        
+        for rel in relationships:
+            from_table_orig = rel.get("from_table", "")
+            to_table_orig = rel.get("to_table", "")
+            from_table_lower = from_table_orig.lower()
+            to_table_lower = to_table_orig.lower()
+            confidence = float(rel.get("confidence", 0))
+            
+            # Skip if confidence too low
+            if confidence < confidence_threshold:
+                continue
+            
+            # Check if this relationship connects a selected table to a potential bridge table
+            if from_table_lower in selected_lower and to_table_lower not in selected_lower:
+                # to_table is a potential bridge table connecting from_table
+                if to_table_lower not in table_connections:
+                    table_connections[to_table_lower] = set()
+                table_connections[to_table_lower].add(from_table_orig)  # Store original case
+            
+            if to_table_lower in selected_lower and from_table_lower not in selected_lower:
+                # from_table is a potential bridge table connecting to_table
+                if from_table_lower not in table_connections:
+                    table_connections[from_table_lower] = set()
+                table_connections[from_table_lower].add(to_table_orig)  # Store original case
+        
+        # Find tables that connect 2+ selected tables (these are bridge tables)
+        for table_name_lower, connected_tables in table_connections.items():
+            if len(connected_tables) >= 2:
+                # This table connects multiple selected tables - it's a bridge table
+                # Get original case name from join graph
+                if table_name_lower in table_name_map:
+                    original_name = table_name_map[table_name_lower]
+                    bridge_tables.add(original_name)
+                    logger.info(f"Found bridge table '{original_name}' connecting {len(connected_tables)} selected tables: {list(connected_tables)}")
+        
+        return bridge_tables
+    
     def _extract_tables_from_join_plan(self, join_plan: str) -> set:
         """
         Extract table names mentioned in the join plan.
@@ -499,6 +646,147 @@ Return ONLY the SQL query, nothing else.
         
         return steps
 
+    # SQL Correction Agent
+    @trace_step('correct_sql')
+    def _correct_sql(self, state: SQLGraphState) -> SQLGraphState:
+        """
+        Focused correction agent that fixes SQL errors with minimal context.
+        
+        This agent receives:
+        - Failed SQL query
+        - Specific error message
+        - Relevant table schemas (only tables used in query)
+        - Relevant relationships (only relationships between used tables)
+        - Correction history (previous attempts)
+        """
+        sql = state.get("sql", "")
+        validation_errors = state.get("validation_errors")
+        if validation_errors:
+            error_message = state.get("last_sql_error") or " | ".join(validation_errors)
+        else:
+            error_message = state.get("last_sql_error") or "Unknown error"
+        correction_attempts = state.get("sql_correction_attempts", 0)
+        
+        # Check max attempts
+        if correction_attempts >= settings.sql_correction_max_attempts:
+            logger.error(f"Max correction attempts ({settings.sql_correction_max_attempts}) reached")
+            state["result"] = f"Error: Could not fix SQL after {settings.sql_correction_max_attempts} attempts. Last error: {error_message}"
+            return state
+        
+        # Increment attempts
+        state["sql_correction_attempts"] = correction_attempts + 1
+        
+        # Get tables used in the SQL query
+        import re
+        # Extract from FROM and JOIN clauses
+        table_pattern = r'\b(?:FROM|JOIN|INTO|UPDATE)\s+([a-zA-Z_][a-zA-Z0-9_]*)'
+        tables_in_sql = set(re.findall(table_pattern, sql, re.IGNORECASE))
+        # Also extract from table.column patterns (SELECT, WHERE, ON, etc.)
+        column_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)'
+        for table, _ in re.findall(column_pattern, sql):
+            # Remove secure_ prefix for lookup
+            base_table = table.replace('secure_', '')
+            tables_in_sql.add(base_table)
+        
+        # Build relevant table schemas (only tables used in query)
+        table_schemas = []
+        for table_name in sorted(tables_in_sql):
+            # Table name should already have secure_ removed
+            if table_name in self.join_graph["tables"]:
+                columns = self.join_graph["tables"][table_name].get("columns", [])
+                columns_str = ', '.join(columns[:100])
+                table_schemas.append(f"{table_name}: {columns_str}")
+        
+        # Get relevant relationships (only between tables in query)
+        relevant_relationships = []
+        for rel in state.get("allowed_relationships", []):
+            from_table = rel.get("from_table", "")
+            to_table = rel.get("to_table", "")
+            # Check if both tables are in the query (remove secure_ prefix for comparison)
+            from_base = from_table.replace('secure_', '')
+            to_base = to_table.replace('secure_', '')
+            # Include if either table is in the query (for joins)
+            if from_base in tables_in_sql or to_base in tables_in_sql:
+                relevant_relationships.append(rel)
+        
+        # Build correction history
+        correction_history = state.get("correction_history") or []
+        history_text = ""
+        if correction_history:
+            history_text = "\nPrevious correction attempts:\n"
+            for i, attempt in enumerate(correction_history[-3:], 1):  # Show last 3 attempts
+                history_text += f"{i}. Error: {attempt.get('error', 'Unknown')}\n"
+                history_text += f"   Attempted fix: {attempt.get('sql', 'N/A')[:100]}...\n"
+        
+        # Build focused prompt
+        prompt = f"""You are a SQL correction agent. Fix this SQL error:
+
+ERROR: {error_message}
+
+FAILED SQL:
+{sql}
+
+RELEVANT TABLE SCHEMAS (only tables used in the query above):
+{chr(10).join(table_schemas) if table_schemas else "No tables found"}
+
+RELEVANT RELATIONSHIPS (only between tables in query):
+{json.dumps(relevant_relationships[:20], indent=2) if relevant_relationships else "No relationships found"}
+{history_text}
+
+INSTRUCTIONS:
+1. Analyze the error message carefully
+2. Check the table schemas to find where the column actually exists
+3. Fix the SQL query by:
+   - Using the correct table name for each column
+   - Ensuring all columns exist in their respective tables
+   - Fixing any join conditions that reference wrong columns
+4. Return ONLY the corrected SQL query, nothing else
+5. Do NOT add comments or explanations
+
+CORRECTED SQL QUERY:"""
+        
+        logger.info(f"[PROMPT] correct_sql prompt (attempt {correction_attempts + 1}):\n{prompt}")
+        
+        try:
+            response = self.llm.invoke(prompt)
+            corrected_sql = str(response.content).strip() if hasattr(response, 'content') and response.content else ""
+            
+            # Clean up if wrapped in code blocks
+            if corrected_sql.startswith("```"):
+                lines = corrected_sql.split("\n")
+                corrected_sql = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
+            
+            # Remove SQL keyword if present
+            if corrected_sql.upper().startswith("SQL"):
+                corrected_sql = corrected_sql[3:].strip()
+            
+            logger.info(f"Corrected SQL (attempt {correction_attempts + 1}): {corrected_sql[:200]}...")
+            
+            # Apply secure view rewriting
+            rewritten_sql = rewrite_secure_tables(corrected_sql)
+            
+            # Update state
+            state["sql"] = rewritten_sql
+            state["last_sql_error"] = None  # Clear error for next validation
+            
+            # Add to correction history
+            if state.get("correction_history") is None:
+                state["correction_history"] = []
+            correction_history = state["correction_history"]
+            if correction_history is not None:
+                correction_history.append({
+                    "attempt": correction_attempts + 1,
+                    "error": error_message,
+                    "sql": corrected_sql[:500]  # Store first 500 chars
+                })
+            
+            return state
+            
+        except Exception as e:
+            logger.error(f"Error in correction agent: {e}")
+            state["result"] = f"Error in correction agent: {str(e)}"
+            return state
+
     # 5) Execution + Validator (retry-on-empty)
     @trace_step('execute_and_validate')
     def _execute_and_validate(self, state: SQLGraphState) -> SQLGraphState:
@@ -509,11 +797,29 @@ Return ONLY the SQL query, nothing else.
             res, column_names = sql_tool.run_query_with_columns(state["sql"])
             state["column_names"] = column_names
             logger.debug(f"Query returned {len(column_names)} columns: {column_names}")
+            
+            # Clear any previous errors on success
+            state["last_sql_error"] = None
+            state["validation_errors"] = None
+            
         except Exception as e:
-            # hard fail -> no retry unless you want it
-            state["result"] = f"Error executing query: {e}"
+            # Extract error message
+            error_str = str(e)
+            state["last_sql_error"] = error_str
             state["column_names"] = None
-            return state
+            
+            # Check if we should route to correction agent
+            correction_attempts = state.get("sql_correction_attempts", 0)
+            if correction_attempts < settings.sql_correction_max_attempts:
+                logger.warning(f"SQL execution error (attempt {correction_attempts + 1}): {error_str[:200]}")
+                # Route to correction agent - signal by setting result to None
+                state["result"] = None
+                return state
+            else:
+                # Max attempts reached - hard fail
+                logger.error(f"Max correction attempts reached. Final error: {error_str}")
+                state["result"] = f"Error executing query after {settings.sql_correction_max_attempts} correction attempts: {error_str}"
+                return state
 
         # Normalize "empty" – depends on SQLDatabase.run formatting
         is_empty = (res is None) or (str(res).strip() == "") or ("[]" in str(res).strip())
@@ -691,11 +997,73 @@ If date filters exist, ensure you're filtering on the correct table columns.
         
         return state
 
+    def _route_after_validation(self, state: SQLGraphState) -> str:
+        """
+        Route after pre-execution validation.
+        
+        Returns:
+            "execute" if validation passed
+            "correct_sql" if validation failed and can retry
+            "finalize" if validation failed and max attempts reached
+        """
+        validation_errors = state.get("validation_errors")
+        if not validation_errors:
+            # Validation passed - proceed to execution
+            return "execute"
+        
+        # Validation failed - check if we can correct
+        correction_attempts = state.get("sql_correction_attempts", 0)
+        if correction_attempts < settings.sql_correction_max_attempts:
+            # Store validation errors as last_sql_error for correction agent
+            state["last_sql_error"] = " | ".join(validation_errors)
+            logger.info(f"Validation failed, routing to correction agent (attempt {correction_attempts + 1})")
+            return "correct_sql"
+        else:
+            # Max attempts reached - fail
+            logger.error(f"Max correction attempts reached. Validation errors: {validation_errors}")
+            state["result"] = f"SQL validation failed after {settings.sql_correction_max_attempts} attempts. Errors: {' | '.join(validation_errors)}"
+            return "finalize"
+    
     def _route_after_execute(self, state: SQLGraphState) -> str:
-        # If we set retries and result is None, we want to regenerate SQL
-        if state["retries"] > 0 and state.get("result") is None:
+        """
+        Route after SQL execution.
+        
+        Returns:
+            "finalize" if execution succeeded
+            "correct_sql" if execution failed and can retry
+            "generate_sql" if empty result and can retry
+            "finalize" if max attempts reached
+        """
+        result = state.get("result")
+        
+        # If result is None, it means execution failed and we should correct
+        if result is None:
+            correction_attempts = state.get("sql_correction_attempts", 0)
+            if correction_attempts < settings.sql_correction_max_attempts:
+                logger.info(f"Execution failed, routing to correction agent (attempt {correction_attempts + 1})")
+                return "correct_sql"
+            else:
+                # Max attempts reached - finalize with error
+                return "finalize"
+        
+        # If result contains error message, finalize
+        if isinstance(result, str) and result.startswith("Error"):
+            return "finalize"
+        
+        # If we set retries and result is None, we want to regenerate SQL (empty result retry)
+        if state["retries"] > 0 and result is None:
             return "generate_sql"
+        
+        # Success - finalize
         return "finalize"
+    
+    def _route_after_correction(self, state: SQLGraphState) -> str:
+        """
+        Route after SQL correction.
+        
+        Always routes back to validation to check the corrected SQL.
+        """
+        return "validate_sql"
 
     def _build(self):
         g = StateGraph(SQLGraphState)
@@ -703,6 +1071,8 @@ If date filters exist, ensure you're filtering on the correct table columns.
         g.add_node("filter_relationships", self._filter_relationships)
         g.add_node("plan_joins", self._plan_joins)
         g.add_node("generate_sql", self._generate_sql)
+        g.add_node("validate_sql", self._validate_sql_before_execution)
+        g.add_node("correct_sql", self._correct_sql)
         g.add_node("execute", self._execute_and_validate)
         g.add_node("finalize", self._finalize)
 
@@ -710,14 +1080,30 @@ If date filters exist, ensure you're filtering on the correct table columns.
         g.add_edge("select_tables", "filter_relationships")
         g.add_edge("filter_relationships", "plan_joins")
         g.add_edge("plan_joins", "generate_sql")
-        g.add_edge("generate_sql", "execute")
+        g.add_edge("generate_sql", "validate_sql")
 
+        # Route after validation: execute (if valid) or correct_sql (if invalid) or finalize (if max attempts)
+        g.add_conditional_edges(
+            "validate_sql",
+            self._route_after_validation,
+            {
+                "execute": "execute",
+                "correct_sql": "correct_sql",
+                "finalize": "finalize",
+            },
+        )
+
+        # Route after correction: always go back to validation
+        g.add_edge("correct_sql", "validate_sql")
+
+        # Route after execute: finalize (if success) or correct_sql (if error) or generate_sql (if empty retry)
         g.add_conditional_edges(
             "execute",
             self._route_after_execute,
             {
-                "generate_sql": "generate_sql",
                 "finalize": "finalize",
+                "correct_sql": "correct_sql",
+                "generate_sql": "generate_sql",
             },
         )
 
@@ -741,6 +1127,10 @@ If date filters exist, ensure you're filtering on the correct table columns.
             "retries": 0,
             "final_answer": None,
             "structured_result": None,
+            "sql_correction_attempts": 0,
+            "last_sql_error": None,
+            "correction_history": None,
+            "validation_errors": None,
         }
         out = self.workflow.invoke(state)
         return out.get("final_answer") or "No answer generated."
@@ -763,6 +1153,10 @@ If date filters exist, ensure you're filtering on the correct table columns.
             "retries": 0,
             "final_answer": None,
             "structured_result": None,
+            "sql_correction_attempts": 0,
+            "last_sql_error": None,
+            "correction_history": None,
+            "validation_errors": None,
         }
         out = self.workflow.invoke(state)
         return {
