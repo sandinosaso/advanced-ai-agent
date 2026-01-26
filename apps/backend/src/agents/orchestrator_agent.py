@@ -8,7 +8,7 @@ This is the primary agent that routes questions to:
 Uses LangGraph to create a stateful workflow with intelligent routing.
 """
 
-from typing import Annotated, TypedDict, Dict, Any, Sequence, List
+from typing import Annotated, TypedDict, Dict, Any, Sequence, List, Optional
 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
@@ -47,18 +47,18 @@ class OrchestratorAgent:
     def __init__(
         self,
         model: str = "gpt-4o-mini",
-        temperature: float = 0.1
+        temperature: Optional[float] = None
     ):
         """
         Initialize orchestrator
         
         Args:
             model: LLM model for routing decisions
-            temperature: Generation temperature
+            temperature: Generation temperature (defaults to settings.orchestrator_temperature)
         """
         self.llm = ChatOpenAI(
             model=model, 
-            temperature=temperature,
+            temperature=temperature if temperature is not None else settings.orchestrator_temperature,
             max_completion_tokens=settings.max_output_tokens
         )
         self.sql_agent = SQLGraphAgent()

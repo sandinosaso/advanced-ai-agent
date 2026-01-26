@@ -58,6 +58,21 @@ class Settings(BaseSettings):
     sql_max_tables_in_context: int = Field(default=20)
     sql_correction_max_attempts: int = Field(default=3)  # Max correction attempts
     sql_pre_validation_enabled: bool = Field(default=True)  # Enable pre-execution validation
+    sql_confidence_threshold: float = Field(default=0.70)  # Minimum confidence for relationships (0.0-1.0)
+    
+    # SQL Agent Prompt Limits (to control token usage)
+    sql_max_relationships_display: int = Field(default=50)  # Max relationships for initial display
+    sql_max_relationships_in_prompt: int = Field(default=20)  # Max relationships in SQL generation/correction prompts
+    sql_max_suggested_paths: int = Field(default=15)  # Max suggested join paths in join planning prompt
+    sql_max_columns_in_schema: int = Field(default=50)  # Max columns shown in table schemas
+    sql_max_columns_in_validation: int = Field(default=100)  # Max columns in validation error messages
+    sql_max_columns_in_correction: int = Field(default=100)  # Max columns in correction agent schemas
+    sql_max_sql_history_length: int = Field(default=100)  # Max SQL length in correction history
+    sql_max_fallback_tables: int = Field(default=5)  # Max tables in fallback selection
+    sql_max_tables_in_selection_prompt: int = Field(default=250)  # Max tables shown in table selection prompt
+    
+    # Orchestrator Agent Configuration
+    orchestrator_temperature: float = Field(default=0.1)  # Temperature for orchestrator LLM (0.0-2.0)
     
     # Token Limits
     max_context_tokens: int = Field(default=120000)

@@ -17,11 +17,8 @@ from src.utils.logger import logger
 from src.utils.path_finder import JoinPathFinder
 from src.tools.sql_tool import sql_tool
 from src.sql.secure_views import (
-    SECURE_VIEW_MAP,
     rewrite_secure_tables,
-    validate_tables_exist,
-    is_secure_table,
-    to_secure_view
+    from_secure_view
 )
 
 # TODO change it for join_graph_validated.json when ready
@@ -72,17 +69,33 @@ def trace_step(step_name):
 
 class SQLGraphAgent:
     """
-    LangGraph-based SQL agent:
+    LangGraph-based SQL agent for natural language to SQL conversion.
+    
+    Uses graph algorithms (Dijkstra) to discover optimal join paths between tables
+    in a MySQL database with 100+ tables.
 
+    Workflow:
     NL Question
        ↓
-    [Table Selector]
+    [Table Selector] - LLM selects 5-10 relevant tables from 100+
        ↓
-    [Join Planner]
+    [Filter Relationships] - Filters relationships by confidence threshold
        ↓
-    [SQL Generator]
+    [Path Finder] - Uses Dijkstra to find shortest join paths
        ↓
-    [Execution + Validator]
+    [Join Planner] - LLM plans joins using discovered paths
+       ↓
+    [SQL Generator] - LLM generates SQL with proper joins
+       ↓
+    [Secure Rewriter] - Rewrites to use secure views for encrypted tables
+       ↓
+    [Pre-Validation] - Validates columns/joins before execution
+       ↓
+    [Execute] - Executes SQL query
+       ↓
+    [Correction Agent] - Fixes errors if validation/execution fails (iterative)
+       ↓
+    [Finalize] - Formats result (structured + raw)
        ↓
     Answer
     """
@@ -98,7 +111,7 @@ class SQLGraphAgent:
         # Initialize path finder for efficient transitive join path discovery
         self.path_finder = JoinPathFinder(
             self.join_graph["relationships"],
-            confidence_threshold=0.70
+            confidence_threshold=settings.sql_confidence_threshold
         )
         
         self.workflow = self._build()
@@ -122,13 +135,13 @@ class SQLGraphAgent:
 Select the set of tables needed to answer the question.
 
 Rules:
-- Return 5 to 10 tables (prefer more tables than fewer to ensure all needed data is available)
+- Return 3 to 8 tables (prefer fewer tables that you need to answer the question)
 - Select from ACTUAL available tables (join graph reflects reality)
 - If unsure, return fewer tables
 - DO NOT invent table names that don't exist
 
 Available tables (subset shown if large):
-{', '.join(all_tables[:250])}
+{', '.join(all_tables[:settings.sql_max_tables_in_selection_prompt])}
 
 Question: {state['question']}
 
@@ -154,7 +167,7 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
                 if "employee" in self.join_graph["tables"]:
                     fallback.append("employee")
             if not fallback:
-                fallback = list(all_tables[:5])
+                fallback = list(all_tables[:settings.sql_max_fallback_tables])
             tables = fallback
             logger.info(f"Fallback selected tables: {tables}")
         logger.info(f"Selected tables: {tables}")
@@ -177,14 +190,14 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
 
         # Keep direct relationships:
         # - edges where both endpoints are in selected tables
-        # - confidence threshold
-        CONF_THRESH = 0.70
+        # - confidence threshold (configurable via settings.sql_confidence_threshold)
+        confidence_threshold = settings.sql_confidence_threshold
 
         direct_relationships = [
             r for r in rels
             if r["from_table"] in selected
             and r["to_table"] in selected
-            and float(r.get("confidence", 0)) >= CONF_THRESH
+            and float(r.get("confidence", 0)) >= confidence_threshold
         ]
 
         logger.info(
@@ -252,6 +265,9 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
                     path_desc = self.path_finder.get_path_description(path)
                     # Extract all tables in the path (including bridge tables)
                     tables_in_path = set()
+                    # Calculate average confidence for path ranking
+                    avg_confidence = sum(float(rel.get('confidence', 0.5)) for rel in path) / len(path) if path else 0
+                    
                     for rel in path:
                         tables_in_path.add(rel['from_table'])
                         tables_in_path.add(rel['to_table'])
@@ -261,6 +277,7 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
                         "to": table2,
                         "path": path_desc,
                         "hops": len(path),
+                        "confidence_sort": avg_confidence,  # For sorting only, not in JSON
                         "tables_used": sorted(tables_in_path),  # Include bridge tables
                         "join_steps": [
                             f"{rel['from_table']}.{rel['from_column']} = {rel['to_table']}.{rel['to_column']}"
@@ -268,8 +285,19 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
                         ]
                     })
         
+        # Sort paths by relevance: shortest paths first, then by confidence
+        suggested_paths.sort(key=lambda x: (x['hops'], -x['confidence_sort']))
+        
+        # Limit suggested paths to avoid token bloat (this is the main culprit!)
+        # With 10 tables = 45 possible paths. Limiting to top 15 most relevant paths.
+        suggested_paths = suggested_paths[:settings.sql_max_suggested_paths]
+        
+        # Remove sorting field before JSON serialization
+        for path in suggested_paths:
+            path.pop('confidence_sort', None)
+        
         # Format relationships for prompt (limit to avoid token bloat)
-        rels_display = allowed_rels[:50]  # Limit to first 50 for prompt size
+        rels_display = allowed_rels[:settings.sql_max_relationships_display]
         
         # Find the most relevant suggested path for connecting crew to employee
         crew_to_employee_path = None
@@ -315,7 +343,7 @@ These paths are computed by the graph algorithm and include ALL bridge tables ne
 {relevant_path_section}
 
 Direct and transitive relationships available (for reference only - prefer suggested paths):
-{json.dumps(rels_display[:20], indent=2)}  # Limited to avoid confusion
+{json.dumps(rels_display[:settings.sql_max_relationships_in_prompt], indent=2)}  # Limited to avoid confusion
 
 Task:
 - PRIMARY: Use the suggested paths above - they are computed by the graph algorithm and are correct
@@ -355,7 +383,7 @@ NOTES:
         
         This separation ensures:
         - LLM doesn't hallucinate secure_* variants for tables that don't need them
-        - Rewriting is deterministic and based on SECURE_VIEW_MAP
+        - Rewriting is deterministic and based on the secure views system
         - No more secure_inspections errors
         """
         # Extract all tables mentioned in the join plan (including bridge tables)
@@ -372,9 +400,9 @@ NOTES:
         for table_name in sorted(all_tables):
             if table_name in self.join_graph["tables"]:
                 columns = self.join_graph["tables"][table_name].get("columns", [])
-                # Show all columns (or at least more than 20) so LLM has complete information
-                columns_str = ', '.join(columns[:50])  # Increased limit for completeness
-                if len(columns) > 50:
+                # Show columns up to configured limit so LLM has complete information
+                columns_str = ', '.join(columns[:settings.sql_max_columns_in_schema])
+                if len(columns) > settings.sql_max_columns_in_schema:
                     columns_str += f" ... ({len(columns)} total columns)"
                 table_schemas.append(f"{table_name}: {columns_str}")
             else:
@@ -464,9 +492,8 @@ Return ONLY the SQL query, nothing else.
         table_name_map = {t.lower(): t for t in self.join_graph["tables"].keys()}
         
         for table_name, column_name in matches:
-            # Handle secure views (remove secure_ prefix for lookup)
-            base_table = table_name.replace('secure_', '')
-            check_table = base_table if table_name.startswith('secure_') else table_name
+            # Convert secure view to base table for lookup (single source of truth)
+            check_table = from_secure_view(table_name)
             
             # Check if table exists in join graph
             if check_table.lower() in table_name_map:
@@ -486,12 +513,12 @@ Return ONLY the SQL query, nothing else.
                             error_msg = (
                                 f"Column '{column_name}' does NOT exist in table '{check_table}'. "
                                 f"Found in: {', '.join(possible_tables)}. "
-                                f"Available columns in {check_table}: {', '.join(columns[:100])}"
+                                f"Available columns in {check_table}: {', '.join(columns[:settings.sql_max_columns_in_validation])}"
                             )
                         else:
                             error_msg = (
                                 f"Column '{column_name}' does NOT exist in table '{check_table}'. "
-                                f"Available columns: {', '.join(columns[:100])}"
+                                f"Available columns: {', '.join(columns[:settings.sql_max_columns_in_validation])}"
                             )
                         errors.append(error_msg)
                         logger.warning(f"Validation error: {error_msg}")
@@ -684,17 +711,19 @@ Return ONLY the SQL query, nothing else.
         # Also extract from table.column patterns (SELECT, WHERE, ON, etc.)
         column_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)'
         for table, _ in re.findall(column_pattern, sql):
-            # Remove secure_ prefix for lookup
-            base_table = table.replace('secure_', '')
+            # Convert secure view to base table for lookup (single source of truth)
+            base_table = from_secure_view(table)
             tables_in_sql.add(base_table)
         
         # Build relevant table schemas (only tables used in query)
         table_schemas = []
         for table_name in sorted(tables_in_sql):
-            # Table name should already have secure_ removed
+            # table_name is already base table (from_secure_view was applied above)
             if table_name in self.join_graph["tables"]:
                 columns = self.join_graph["tables"][table_name].get("columns", [])
-                columns_str = ', '.join(columns[:100])
+                columns_str = ', '.join(columns[:settings.sql_max_columns_in_correction])
+                if len(columns) > settings.sql_max_columns_in_correction:
+                    columns_str += f" ... ({len(columns)} total columns)"
                 table_schemas.append(f"{table_name}: {columns_str}")
         
         # Get relevant relationships (only between tables in query)
@@ -702,9 +731,9 @@ Return ONLY the SQL query, nothing else.
         for rel in state.get("allowed_relationships", []):
             from_table = rel.get("from_table", "")
             to_table = rel.get("to_table", "")
-            # Check if both tables are in the query (remove secure_ prefix for comparison)
-            from_base = from_table.replace('secure_', '')
-            to_base = to_table.replace('secure_', '')
+            # Convert secure views to base tables for comparison (single source of truth)
+            from_base = from_secure_view(from_table)
+            to_base = from_secure_view(to_table)
             # Include if either table is in the query (for joins)
             if from_base in tables_in_sql or to_base in tables_in_sql:
                 relevant_relationships.append(rel)
@@ -716,7 +745,50 @@ Return ONLY the SQL query, nothing else.
             history_text = "\nPrevious correction attempts:\n"
             for i, attempt in enumerate(correction_history[-3:], 1):  # Show last 3 attempts
                 history_text += f"{i}. Error: {attempt.get('error', 'Unknown')}\n"
-                history_text += f"   Attempted fix: {attempt.get('sql', 'N/A')[:100]}...\n"
+                sql_preview = attempt.get('sql', 'N/A')
+                if len(sql_preview) > settings.sql_max_sql_history_length:
+                    sql_preview = sql_preview[:settings.sql_max_sql_history_length] + "..."
+                history_text += f"   Attempted fix: {sql_preview}\n"
+        
+        # Detect specific error types for targeted instructions
+        is_group_by_error = "GROUP BY" in error_message.upper() or "not in GROUP BY" in error_message.upper() or "only_full_group_by" in error_message.lower()
+        
+        group_by_instructions = ""
+        if is_group_by_error:
+            # Extract the problematic expression from error message if possible
+            import re
+            expr_match = re.search(r"Expression #(\d+)", error_message)
+            expr_num = expr_match.group(1) if expr_match else None
+            
+            # Try to extract the column/expression mentioned in error
+            column_match = re.search(r"column ['\"]([^'\"]+)['\"]", error_message)
+            problem_column = column_match.group(1) if column_match else None
+            
+            expr_hint = ""
+            if expr_num:
+                expr_hint = f"\nThe error mentions Expression #{expr_num} in the SELECT list. "
+            if problem_column:
+                expr_hint += f"The problematic column/expression is: {problem_column}"
+            
+            group_by_instructions = f"""
+CRITICAL GROUP BY RULES (MySQL ONLY_FULL_GROUP_BY mode):
+{expr_hint}
+
+- Every non-aggregated column/expression in SELECT must either:
+  1. Be in GROUP BY with the EXACT same expression, OR
+  2. Be functionally dependent on columns in GROUP BY
+
+COMMON FIXES:
+- If SELECT has: DATE_FORMAT(DATE(column), 'format'), GROUP BY must have: DATE_FORMAT(DATE(column), 'format')
+- If SELECT has: DATE(column), GROUP BY must have: DATE(column) (NOT just 'column')
+- If SELECT has: CONCAT(col1, col2), GROUP BY must have: CONCAT(col1, col2)
+- If SELECT has: column AS alias, GROUP BY can use either 'column' or the full expression
+
+EXAMPLE FIX:
+  SELECT DATE_FORMAT(DATE(createdAt), '%Y-%m-%d') AS date, SUM(hours)
+  FROM workTime
+  GROUP BY DATE_FORMAT(DATE(createdAt), '%Y-%m-%d')  -- Must match SELECT exactly
+"""
         
         # Build focused prompt
         prompt = f"""You are a SQL correction agent. Fix this SQL error:
@@ -730,7 +802,7 @@ RELEVANT TABLE SCHEMAS (only tables used in the query above):
 {chr(10).join(table_schemas) if table_schemas else "No tables found"}
 
 RELEVANT RELATIONSHIPS (only between tables in query):
-{json.dumps(relevant_relationships[:20], indent=2) if relevant_relationships else "No relationships found"}
+{json.dumps(relevant_relationships[:settings.sql_max_relationships_in_prompt], indent=2) if relevant_relationships else "No relationships found"}
 {history_text}
 
 INSTRUCTIONS:
@@ -740,6 +812,7 @@ INSTRUCTIONS:
    - Using the correct table name for each column
    - Ensuring all columns exist in their respective tables
    - Fixing any join conditions that reference wrong columns
+{group_by_instructions}
 4. Return ONLY the corrected SQL query, nothing else
 5. Do NOT add comments or explanations
 
@@ -777,7 +850,7 @@ CORRECTED SQL QUERY:"""
                 correction_history.append({
                     "attempt": correction_attempts + 1,
                     "error": error_message,
-                    "sql": corrected_sql[:500]  # Store first 500 chars
+                    "sql": corrected_sql[:settings.sql_max_sql_history_length]  # Truncate for storage
                 })
             
             return state

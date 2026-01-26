@@ -539,6 +539,96 @@ sequenceDiagram
     Orchestrator-->>User: Final answer
 ```
 
+## Configuration
+
+### Environment Variables
+
+All configuration is managed through environment variables loaded from `.env` file.
+
+**Location**: `apps/backend/.env.example` (template), `apps/backend/.env` (actual)
+
+#### Database Configuration
+
+```bash
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=root
+DB_PWD=
+DB_NAME=crewos
+DB_ENCRYPT_KEY=your_encryption_key_here
+```
+
+#### OpenAI Configuration
+
+```bash
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_TEMPERATURE=0.1
+```
+
+#### SQL Agent Core Settings
+
+```bash
+# Core behavior
+SQL_AGENT_MAX_ITERATIONS=15          # Max workflow iterations
+SQL_SAMPLE_ROWS=1                    # Sample rows per table for schema
+SQL_MAX_TABLES_IN_CONTEXT=20         # Max tables to include in prompts
+SQL_CORRECTION_MAX_ATTEMPTS=3        # Max SQL correction retries
+SQL_PRE_VALIDATION_ENABLED=true      # Enable pre-execution validation
+```
+
+#### SQL Agent Prompt Limits
+
+These settings control token usage and context size in prompts:
+
+```bash
+# Relationship limits
+SQL_MAX_RELATIONSHIPS_DISPLAY=50     # Max relationships for initial display
+SQL_MAX_RELATIONSHIPS_IN_PROMPT=20   # Max relationships in SQL generation/correction prompts
+
+# Column limits
+SQL_MAX_COLUMNS_IN_SCHEMA=50         # Max columns in table schemas (join planning)
+SQL_MAX_COLUMNS_IN_VALIDATION=100   # Max columns in validation error messages
+SQL_MAX_COLUMNS_IN_CORRECTION=100   # Max columns in correction agent schemas
+
+# Other limits
+SQL_MAX_SQL_HISTORY_LENGTH=100      # Max SQL length in correction history
+SQL_MAX_FALLBACK_TABLES=5           # Max tables in fallback selection
+SQL_MAX_TABLES_IN_SELECTION_PROMPT=250  # Max tables shown in table selection prompt
+```
+
+**Purpose**: Prevent prompt bloat while ensuring sufficient context for accurate SQL generation. Adjust based on:
+- Available token budget
+- Database complexity (number of tables/columns)
+- Model context window size
+
+#### Token Limits
+
+```bash
+MAX_CONTEXT_TOKENS=120000           # Max input tokens
+MAX_OUTPUT_TOKENS=4000              # Max output tokens
+MAX_QUERY_ROWS=100                  # Max rows returned from queries
+```
+
+### Configuration Loading
+
+**Location**: `src/utils/config.py`
+
+Configuration is loaded using Pydantic `BaseSettings`, which automatically:
+- Reads from `.env` file
+- Reads from environment variables
+- Provides type validation
+- Sets sensible defaults
+
+**Usage**:
+```python
+from src.utils.config import settings
+
+# Access configuration
+max_tables = settings.sql_max_tables_in_context
+max_columns = settings.sql_max_columns_in_schema
+```
+
 ## Database Configuration
 
 ### MySQL Connection

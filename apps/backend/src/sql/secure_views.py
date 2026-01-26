@@ -95,6 +95,49 @@ def to_secure_view(table: str) -> str:
     return table
 
 
+def from_secure_view(table: str) -> str:
+    """
+    Convert secure view to base table if applicable.
+    Otherwise return table unchanged.
+    
+    This is the reverse of to_secure_view().
+    
+    Args:
+        table: Table name (could be secure view or base table)
+        
+    Returns:
+        Base table name if table is a secure view, otherwise original table
+        
+    Examples:
+        >>> from_secure_view("secure_employee")
+        "employee"
+        >>> from_secure_view("secure_workorder")
+        "workOrder"
+        >>> from_secure_view("inspections")
+        "inspections"
+        >>> from_secure_view("employee")
+        "employee"
+    """
+    # Check if it's a secure view (exact match)
+    for base_table, secure_view in SECURE_VIEW_MAP.items():
+        if table == secure_view:
+            return base_table
+        # Case-insensitive match
+        if table.lower() == secure_view.lower():
+            return base_table
+    
+    # Check if it starts with secure_ prefix (fallback for edge cases)
+    if table.lower().startswith("secure_"):
+        suffix = table[7:]  # Remove "secure_" prefix
+        # Try to find matching base table
+        for base_table, secure_view in SECURE_VIEW_MAP.items():
+            if suffix.lower() == base_table.lower() or suffix.lower() == secure_view[7:].lower():
+                return base_table
+    
+    # No match, return original
+    return table
+
+
 def rewrite_secure_tables(sql: str) -> str:
     """
     Replace base tables with secure views ONLY for allow-listed tables.
@@ -306,6 +349,13 @@ if __name__ == "__main__":
     assert to_secure_view("EMPLOYEE") == "secure_employee"
     assert to_secure_view("inspections") == "inspections"
     print("✅ to_secure_view tests passed")
+    
+    # Test from_secure_view
+    assert from_secure_view("secure_employee") == "employee"
+    assert from_secure_view("secure_workorder") == "workOrder"
+    assert from_secure_view("inspections") == "inspections"
+    assert from_secure_view("employee") == "employee"
+    print("✅ from_secure_view tests passed")
     
     # Test rewrite_secure_tables
     sql1 = "SELECT * FROM employee WHERE id = 1"
