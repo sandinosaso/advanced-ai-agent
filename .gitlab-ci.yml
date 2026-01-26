@@ -1,0 +1,11 @@
+image: rockylinux:8
+
+Prod:
+  stage: deploy
+  script:
+    - dnf install openssh-clients -y
+    - eval $(ssh-agent -s)
+    - ssh-add <(echo "$SSH_PRIVATE_KEY")
+    - ssh -o StrictHostKeyChecking=no -t ubuntu@54.90.67.217 "/home/ubuntu/deploy.sh"
+  only:
+    - main
