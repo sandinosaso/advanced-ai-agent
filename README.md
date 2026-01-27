@@ -101,11 +101,13 @@ advanced-ai-agent/
    Copy `.env.example` to `.env` and configure:
    ```env
    OPENAI_API_KEY=your-key-here
-   DATABASE_URL=mysql+pymysql://user:password@host:port/database
+   DB_HOST=127.0.0.1
+   DB_PORT=3306
+   DB_USER=root
+   DB_PWD=your_password
+   DB_NAME=crewos
+   DB_ENCRYPT_KEY=your_encryption_key
    ```
-
-4. **Configure database:**
-   Edit `config/config.yaml` with your database settings
 
 ## Running the Application
 
