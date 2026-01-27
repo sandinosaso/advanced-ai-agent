@@ -39,8 +39,8 @@ else
 fi
 echo ""
 
-# Navigate to backend directory
-cd "$(dirname "$0")/../backend" || exit
+# Navigate to project root
+cd "$(dirname "$0")/.." || exit
 
 # Create virtual environment with UV
 echo "🐍 Setting up Python virtual environment..."
@@ -60,7 +60,11 @@ echo ""
 
 # Install dependencies
 echo "📦 Installing Python dependencies..."
-uv pip install -r requirements.txt
+if command -v uv &> /dev/null; then
+    uv pip install -r requirements.txt
+else
+    pip install -r requirements.txt
+fi
 echo "   ✅ All dependencies installed"
 echo ""
 
@@ -77,17 +81,12 @@ echo ""
 
 # Create necessary directories
 echo "📁 Creating data directories..."
-mkdir -p data/chroma_db
-mkdir -p data/checkpoints
-mkdir -p data/logs
-echo "   ✅ data/chroma_db/"
-echo "   ✅ data/checkpoints/"
-echo "   ✅ data/logs/"
-echo ""
-
-# Test the setup
-echo "🧪 Testing setup..."
-python main.py
+mkdir -p data/vector_store
+mkdir -p data/embeddings_cache
+mkdir -p artifacts
+echo "   ✅ data/vector_store/"
+echo "   ✅ data/embeddings_cache/"
+echo "   ✅ artifacts/"
 echo ""
 
 # Show environment info
@@ -104,26 +103,25 @@ echo ""
 echo "📝 Next Steps:"
 echo ""
 echo "1️⃣  Configure API Keys:"
-echo "   📝 Edit: backend/.env"
+echo "   📝 Edit: .env"
 echo "   🔑 Add: OPENAI_API_KEY=your_key_here"
-echo "   🔑 Add: FIRECRAWL_API_KEY=your_key_here"
+echo "   🔑 Add: DATABASE_URL=your_database_url"
 echo ""
-echo "2️⃣  Configure Your Profile:"
-echo "   📝 Edit: backend/config/config.yaml"
-echo "   👤 Add your skills, target country, preferences"
+echo "2️⃣  Configure Database:"
+echo "   📝 Edit: config/config.yaml"
+echo "   🗄️  Configure database connection settings"
 echo ""
-echo "3️⃣  Run the Agent:"
-echo "   📂 cd backend"
+echo "3️⃣  Run the API Server:"
 echo "   🐍 source .venv/bin/activate"
-echo "   ▶️  python main.py"
+echo "   ▶️  python scripts/run-dev.py"
 echo ""
 echo "   💡 Or use UV directly (no activation needed):"
-echo "   ▶️  uv run python main.py"
+echo "   ▶️  uv run python scripts/run-dev.py"
 echo ""
 echo "4️⃣  Configure VSCode:"
 echo "   ⌨️  Press: Cmd+Shift+P"
 echo "   🔍 Type: 'Python: Select Interpreter'"
-echo "   ✅ Choose: ./backend/.venv/bin/python"
+echo "   ✅ Choose: ./.venv/bin/python"
 echo ""
 echo "5️⃣  Start Building:"
 echo "   💬 Ask: 'Help me implement Phase 1 - Simple Job Scraper'"

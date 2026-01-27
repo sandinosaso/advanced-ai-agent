@@ -4,6 +4,66 @@
 
 This document describes the architecture of the Advanced AI Agent system - an intelligent SQL agent that works with MySQL databases containing 100+ tables. The system uses LangGraph workflows, graph algorithms for join path discovery, and secure views for encrypted data access.
 
+## API Architecture
+
+### Internal API Service
+
+The system exposes a FastAPI internal service following the Backend-for-Frontend (BFF) pattern.
+
+**Location**: `src/api/`
+
+**Architecture**:
+```mermaid
+graph LR
+    Browser[Browser] --> NodeJS[Node.js BFF<br/>Auth, UX]
+    NodeJS --> FastAPI[FastAPI<br/>Internal API]
+    FastAPI --> Orchestrator[Orchestrator Agent]
+    
+    style NodeJS fill:#4A90E2
+    style FastAPI fill:#50C878
+```
+
+### Endpoint
+
+**POST** `/internal/chat/stream`
+
+**Request**:
+```json
+{
+  "input": {
+    "message": "How many technicians are active?"
+  },
+  "conversation": {
+    "id": "conv-uuid-123",
+    "user_id": "user-456",
+    "company_id": "company-789"
+  }
+}
+```
+
+**Response** (Server-Sent Events):
+```
+data: {"event":"route_decision","route":"sql"}
+
+data: {"event":"tool_start","tool":"sql_agent"}
+
+data: {"event":"token","channel":"final","content":"There"}
+
+data: {"event":"token","channel":"final","content":" are 10"}
+
+data: {"event":"complete","stats":{"tokens":15}}
+```
+
+### Event Types
+
+| Event | Description |
+|-------|-------------|
+| `route_decision` | Agent routing decision (SQL/RAG) |
+| `tool_start` | Tool execution beginning |
+| `token` | Content token with channel |
+| `complete` | Stream finished |
+| `error` | Error occurred |
+
 ## System Components
 
 ```mermaid
@@ -79,7 +139,7 @@ Advanced SQL agent that uses graph algorithms to discover optimal join paths.
 
 **Workflow**:
 ```mermaid
-graph LR
+graph TB
     A[Question] --> B[Table Selector]
     B --> C[Filter Relationships]
     C --> D[Path Finder<br/>Dijkstra]
@@ -88,16 +148,36 @@ graph LR
     F --> G[Secure Rewriter]
     G --> H[Pre-Validation]
     H -->|Valid| I[Executor]
-    H -->|Invalid| J[Correction Agent]
-    J --> H
+    H -->|Invalid| J[Correction Agent<br/>Auto-Fix SQL]
+    J -->|Corrected SQL| H
     I -->|Success| K[Result]
     I -->|Error| J
     I -->|Empty| F
     
-    style D fill:#FFD700
+    note1["<small>⚠️ On error, SQL Graph Agent<br/>calls Correction Agent<br/>to auto-fix query</small>"] -.-> J
+    
+    B2["<small>SQL_MAX_TABLES_IN_SELECTION_PROMPT</small>"] -.-> B
+    C2["<small>SQL_CONFIDENCE_THRESHOLD<br/>SQL_MAX_RELATIONSHIPS_DISPLAY</small>"] -.-> C
+    D2["<small>SQL_CONFIDENCE_THRESHOLD<br/>SQL_MAX_SUGGESTED_PATHS</small>"] -.-> D
+    E2["<small>SQL_MAX_SUGGESTED_PATHS<br/>SQL_MAX_COLUMNS_IN_SCHEMA</small>"] -.-> E
+    F2["<small>SQL_MAX_RELATIONSHIPS_IN_PROMPT<br/>SQL_MAX_COLUMNS_IN_SCHEMA</small>"] -.-> F
+    H2["<small>SQL_PRE_VALIDATION_ENABLED<br/>SQL_MAX_COLUMNS_IN_VALIDATION</small>"] -.-> H
+    I2["<small>MAX_QUERY_ROWS</small>"] -.-> I
+    J2["<small>SQL_CORRECTION_MAX_ATTEMPTS<br/>SQL_MAX_COLUMNS_IN_CORRECTION<br/>SQL_MAX_RELATIONSHIPS_IN_PROMPT<br/>SQL_MAX_SQL_HISTORY_LENGTH</small>"] -.-> J
+    
+    style D fill:#FFA500
     style G fill:#FF6B6B
-    style H fill:#FFA500
+    style H fill:#4A90E2
     style J fill:#FF1493
+    style B2 fill:#F5F5F5
+    style C2 fill:#F5F5F5
+    style D2 fill:#F5F5F5
+    style E2 fill:#F5F5F5
+    style F2 fill:#F5F5F5
+    style H2 fill:#F5F5F5
+    style I2 fill:#F5F5F5
+    style J2 fill:#F5F5F5
+    style note1 fill:#FFF9C4
 ```
 
 **Key Features**:
@@ -172,7 +252,7 @@ graph TB
     H --> I[SQL Agent]
     
     style G fill:#50C878
-    style H fill:#FFD700
+    style H fill:#FFA500
 ```
 
 ### Graph Structure
@@ -402,66 +482,6 @@ sequenceDiagram
     Validator-->>LLM: Results
 ```
 
-## API Architecture
-
-### Internal API Service
-
-The system exposes a FastAPI internal service following the Backend-for-Frontend (BFF) pattern.
-
-**Location**: `src/api/`
-
-**Architecture**:
-```mermaid
-graph LR
-    Browser[Browser] --> NodeJS[Node.js BFF<br/>Auth, UX]
-    NodeJS --> FastAPI[FastAPI<br/>Internal API]
-    FastAPI --> Orchestrator[Orchestrator Agent]
-    
-    style NodeJS fill:#4A90E2
-    style FastAPI fill:#50C878
-```
-
-### Endpoint
-
-**POST** `/internal/chat/stream`
-
-**Request**:
-```json
-{
-  "input": {
-    "message": "How many technicians are active?"
-  },
-  "conversation": {
-    "id": "conv-uuid-123",
-    "user_id": "user-456",
-    "company_id": "company-789"
-  }
-}
-```
-
-**Response** (Server-Sent Events):
-```
-data: {"event":"route_decision","route":"sql"}
-
-data: {"event":"tool_start","tool":"sql_agent"}
-
-data: {"event":"token","channel":"final","content":"There"}
-
-data: {"event":"token","channel":"final","content":" are 10"}
-
-data: {"event":"complete","stats":{"tokens":15}}
-```
-
-### Event Types
-
-| Event | Description |
-|-------|-------------|
-| `route_decision` | Agent routing decision (SQL/RAG) |
-| `tool_start` | Tool execution beginning |
-| `token` | Content token with channel |
-| `complete` | Stream finished |
-| `error` | Error occurred |
-
 ## Data Flow
 
 ### SQL Query Flow
@@ -545,7 +565,7 @@ sequenceDiagram
 
 All configuration is managed through environment variables loaded from `.env` file.
 
-**Location**: `apps/backend/.env.example` (template), `apps/backend/.env` (actual)
+**Location**: `.env.example` (template), `.env` (actual)
 
 #### Database Configuration
 

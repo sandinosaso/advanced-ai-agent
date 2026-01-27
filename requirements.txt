@@ -1,0 +1,53 @@
+# Core AI/LLM Framework (Latest compatible versions)
+langchain==1.2.6
+langchain-openai==1.1.7
+langgraph==1.0.6
+langchain-community==0.4.1
+langchain-core==1.2.7
+langchain-text-splitters==1.1.0
+
+# Database & ORM
+sqlalchemy==2.0.45
+alembic==1.14.0
+pymysql==1.1.1
+
+# Mock Data Generation
+faker==33.1.0
+
+# Web Framework
+fastapi==0.115.6
+uvicorn[standard]==0.40.0
+python-multipart==0.0.20
+
+# Data Validation & Models
+pydantic==2.12.5
+pydantic-settings==2.12.0
+
+# Environment Variables
+python-dotenv==1.2.1
+
+# Vector Database & Embeddings
+chromadb==1.4.1
+sentence-transformers==5.2.0
+
+# OpenAI
+openai==2.15.0
+
+# Better Logging
+loguru==0.7.3
+
+# HTTP Client
+httpx==0.28.1
+
+# Token Counting
+tiktoken==0.12.0
+
+# YAML Configuration
+pyyaml==6.0.3
+
+# Development & Testing
+pytest==8.3.4
+pytest-asyncio==0.25.2
+black==24.10.0
+ruff==0.8.6
+pyright==1.1.408

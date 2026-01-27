@@ -44,9 +44,10 @@ venv.bak/
 !.env.example
 
 # Data & Logs
-backend/data/chroma_db/*
-backend/data/checkpoints/*
-backend/data/logs/*
+data/checkpoints/*
+data/vector_store/*
+data/embeddings_cache/*
+data/logs/*
 *.log
 *.db
 *.sqlite
@@ -73,12 +74,6 @@ dmypy.json
 # Ruff
 .ruff_cache/
 
-# Frontend (Future)
-frontend/node_modules/
-frontend/dist/
-frontend/build/
-frontend/.next/
-frontend/.nuxt/
 
 # OS
 .DS_Store
