@@ -3,7 +3,7 @@ Orchestrator Agent - Main LangGraph workflow for Phase 4
 
 This is the primary agent that routes questions to:
 - SQL Agent (database queries, statistics, calculations)
-- RAG Agent (policies, compliance, handbook questions)
+- RAG Agent (system usage questions, how-to guides from user manual)
 - General Agent (general questions that don't require SQL or RAG)
 
 Uses LangGraph to create a stateful workflow with intelligent three-way routing.
@@ -84,7 +84,7 @@ class OrchestratorAgent:
         
         Three-way classification:
         - SQL: Database queries requiring data retrieval
-        - RAG: Policy/compliance questions requiring document retrieval
+        - RAG: System usage questions requiring user manual retrieval
         - GENERAL: General questions that can be answered directly by LLM
         """
         question = state["question"]
@@ -105,19 +105,22 @@ SQL Examples:
 - "List all technicians with HVAC skills"
 
 **RAG** - ONLY if question asks about:
-- Company policies, procedures, rules
-- Compliance requirements (OSHA, FLSA, etc.)
-- Handbook information
-- How-to guides from company documentation
-- MUST be answerable from company documents
+- System usage, how-to questions, feature explanations
+- How to use specific features or modules in the system
+- Step-by-step instructions for completing tasks
+- Feature descriptions and capabilities
+- System navigation and workflows
+- MUST be answerable from user manual/system documentation
 
 RAG Examples:
-- "What are the overtime rules?"
-- "What safety equipment is required for electrical work?"
-- "How do I submit expense reports?" (if procedure is in handbook)
-- "What is the company PTO policy?"
-- "What are OSHA lockout/tagout requirements?"
-- "Explain the meal break policy"
+- "How do I create a work order?"
+- "How do I add a customer?"
+- "What are the steps to complete an inspection?"
+- "How do I view customer details?"
+- "How do I filter work orders?"
+- "What permissions are needed to access the core module?"
+- "How do I add a customer location?"
+- "How do I assign a crew to a work order?"
 
 **GENERAL** - Use for:
 - General knowledge questions
@@ -136,9 +139,9 @@ GENERAL Examples:
 
 IMPORTANT RULES:
 1. If asking for CURRENT DATA or STATISTICS from the database → SQL
-2. If asking about COMPANY POLICIES or PROCEDURES from documents → RAG
+2. If asking about HOW TO USE THE SYSTEM or SYSTEM FEATURES from user manual → RAG
 3. If asking about GENERAL KNOWLEDGE or non-business topics → GENERAL
-4. If unsure between SQL and RAG, prefer SQL for data queries, RAG for policy queries
+4. If unsure between SQL and RAG, prefer SQL for data queries, RAG for system usage queries
 5. If question doesn't clearly fit SQL or RAG → GENERAL
 
 Question: {question}
@@ -211,7 +214,7 @@ Respond with ONLY one word: SQL, RAG, or GENERAL"""
         return state
     
     def _execute_rag_agent(self, state: AgentState) -> AgentState:
-        """Execute RAG agent for handbook/compliance questions"""
+        """Execute RAG agent for system usage questions"""
         question = state["question"]
         
         # Check if RAG agent is enabled

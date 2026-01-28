@@ -86,16 +86,17 @@ class RAGAgent:
         
         context = "\n".join(context_parts)
         
-        prompt = f"""You are a helpful assistant for Field Service Solutions Inc. Answer the question based ONLY on the provided context from company documents.
+        prompt = f"""You are a helpful assistant for CrewOS. Answer the question based ONLY on the provided context from the user manual.
 
 IMPORTANT RULES:
 - Only use information from the context below
-- If the answer is not in the context, say "I don't have that information in the company documents"
-- Cite which source(s) you used (e.g., "According to the company handbook...")
+- If the answer is not in the context, say "I don't have that information in the user manual"
+- Cite which source(s) you used (e.g., "According to the user manual...")
 - Be specific and accurate
 - If multiple sources conflict, mention both
+- Provide step-by-step instructions when applicable
 
-CONTEXT FROM COMPANY DOCUMENTS:
+CONTEXT FROM USER MANUAL:
 {context}
 
 QUESTION: {question}
@@ -137,7 +138,7 @@ ANSWER:"""
             logger.warning("No relevant chunks found")
             return RAGResponse(
                 question=question,
-                answer="I don't have any relevant information in the company documents to answer that question.",
+                answer="I don't have any relevant information in the user manual to answer that question.",
                 sources=[],
                 confidence=0.0,
                 metadata={"collection": collection, "chunks_found": 0}

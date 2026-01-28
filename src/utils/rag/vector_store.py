@@ -44,8 +44,9 @@ class VectorStore:
     """
     
     COLLECTION_NAMES = {
-        "handbook": "company_handbook",
-        "compliance": "compliance_documents",
+        "handbook": "company_handbook",  # Legacy - kept for backward compatibility
+        "compliance": "compliance_documents",  # Legacy - kept for backward compatibility
+        "manual": "user_manual",  # User manual documentation
         "receipts": "expense_receipts",
         "work_logs": "work_log_descriptions",
         "all": "all_documents"  # Combined collection
@@ -328,6 +329,17 @@ class VectorStore:
     def reset_all(self) -> None:
         """Delete all collections (use with caution!)"""
         logger.warning("Resetting all collections...")
+        
+        # First, try to delete known collections explicitly
+        for coll_type, coll_name in self.COLLECTION_NAMES.items():
+            try:
+                self.client.delete_collection(coll_name)
+                logger.debug(f"Deleted collection: {coll_name}")
+            except Exception as e:
+                # Collection might not exist, which is fine
+                logger.debug(f"Collection {coll_name} not found (may already be deleted): {e}")
+        
+        # Then reset the entire client (this should clear everything)
         self.client.reset()
         self.collections = {}
         logger.info("All collections deleted")
@@ -339,20 +351,20 @@ class VectorStore:
             "collections": {}
         }
         
-        for coll_type, coll_name in self.COLLECTION_NAMES.items():
-            try:
-                coll = self.client.get_collection(coll_name)
-                stats["collections"][coll_type] = {
-                    "name": coll_name,
-                    "count": coll.count(),
-                    "metadata": coll.metadata
-                }
-            except Exception:
-                stats["collections"][coll_type] = {
-                    "name": coll_name,
-                    "count": 0,
-                    "metadata": None
-                }
+        # Get only collections that actually exist
+        existing_collections = {coll.name: coll for coll in self.client.list_collections()}
+        
+        # Create reverse mapping: collection_name -> collection_type
+        name_to_type = {name: coll_type for coll_type, name in self.COLLECTION_NAMES.items()}
+        
+        # Only include collections that exist
+        for coll_name, coll in existing_collections.items():
+            coll_type = name_to_type.get(coll_name, coll_name)  # Use type if mapped, else use name
+            stats["collections"][coll_type] = {
+                "name": coll_name,
+                "count": coll.count(),
+                "metadata": coll.metadata
+            }
         
         return stats
     
