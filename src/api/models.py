@@ -70,11 +70,11 @@ class StreamEvent(BaseModel):
     event: Literal["token", "tool_start", "route_decision", "complete", "error"]
     
     # Optional fields depending on event type
-    channel: Optional[Literal["classify", "sql_agent", "rag_agent", "final"]] = None
+    channel: Optional[Literal["classify", "sql_agent", "rag_agent", "general_agent", "final"]] = None
     content: Optional[str] = None  # Raw content (backward compatible)
     structured_data: Optional[List[Dict[str, Any]]] = None  # Structured array for BFF markdown conversion
     tool: Optional[str] = None
-    route: Optional[Literal["sql", "rag"]] = None
+    route: Optional[Literal["sql", "rag", "general"]] = None
     stats: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     

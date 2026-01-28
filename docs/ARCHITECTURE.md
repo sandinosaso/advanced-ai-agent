@@ -58,7 +58,7 @@ data: {"event":"complete","stats":{"tokens":15}}
 
 | Event | Description |
 |-------|-------------|
-| `route_decision` | Agent routing decision (SQL/RAG) |
+| `route_decision` | Agent routing decision (SQL/RAG/GENERAL) |
 | `tool_start` | Tool execution beginning |
 | `token` | Content token with channel |
 | `complete` | Stream finished |
@@ -72,6 +72,7 @@ graph TB
     Orchestrator --> Classify{Classify Question}
     Classify -->|SQL Query| SQLAgent[SQL Graph Agent]
     Classify -->|Policy/Knowledge| RAGAgent[RAG Agent]
+    Classify -->|General Question| GeneralAgent[General Agent]
     
     SQLAgent --> TableSelector[Table Selector]
     TableSelector --> PathFinder[Path Finder<br/>Dijkstra Algorithm]
@@ -85,14 +86,19 @@ graph TB
     RAGAgent --> VectorStore[(ChromaDB<br/>Vector Store)]
     VectorStore --> Embeddings[Embedding Service]
     
+    GeneralAgent --> LLM[LLM<br/>Direct Response]
+    
     SQLAgent --> Result[Final Answer]
     RAGAgent --> Result
+    GeneralAgent --> Result
     
     style Orchestrator fill:#4A90E2
     style SQLAgent fill:#50C878
     style RAGAgent fill:#FF6B6B
+    style GeneralAgent fill:#9B59B6
     style MySQL fill:#F39C12
     style VectorStore fill:#9B59B6
+    style LLM fill:#3498DB
 ```
 
 ## Core Agents
@@ -109,14 +115,16 @@ stateDiagram-v2
     [*] --> Classify
     Classify --> SQL: Database Query
     Classify --> RAG: Policy/Knowledge
+    Classify --> GENERAL: General Question
     SQL --> Finalize
     RAG --> Finalize
+    GENERAL --> Finalize
     Finalize --> [*]
 ```
 
 **Responsibilities**:
-- Classifies user questions (SQL vs RAG)
-- Routes to SQL Agent or RAG Agent
+- Classifies user questions (SQL vs RAG vs GENERAL)
+- Routes to SQL Agent, RAG Agent, or General Agent
 - Formats final answers
 - Manages conversation state
 
@@ -127,8 +135,11 @@ class AgentState(TypedDict):
     question: str                   # User question
     next_step: str                  # Routing decision
     sql_result: str | None          # SQL agent output
+    sql_structured_result: List[Dict[str, Any]] | None  # Structured data from SQL
     rag_result: str | None          # RAG agent output
+    general_result: str | None      # General agent output
     final_answer: str | None        # Final response
+    final_structured_data: List[Dict[str, Any]] | None  # Structured data for BFF
 ```
 
 ### 2. SQL Graph Agent
@@ -232,6 +243,39 @@ graph LR
 - Compliance documents (OSHA, FLSA)
 - State regulations
 - Work log descriptions
+
+### 4. General Agent
+
+Direct LLM agent for general questions that don't require database or document access.
+
+**Location**: `src/agents/orchestrator_agent.py` (implemented as `_execute_general_agent`)
+
+**Workflow**:
+```mermaid
+graph LR
+    A[Question] --> B[LLM Direct Response]
+    B --> C[Answer]
+    
+    style B fill:#3498DB
+```
+
+**Use Cases**:
+- General knowledge questions
+- Explanations of concepts
+- Questions not related to business data or policies
+- General advice or information
+
+**Examples**:
+- "What is machine learning?"
+- "Explain quantum computing"
+- "What's the weather today?"
+- "How does Python work?"
+
+**Characteristics**:
+- No database access required
+- No document retrieval required
+- Direct LLM response
+- Fast response time (no complex processing)
 
 ## Join Graph Pipeline
 
@@ -559,6 +603,23 @@ sequenceDiagram
     Orchestrator-->>User: Final answer
 ```
 
+### General Query Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Orchestrator
+    participant GeneralAgent
+    participant LLM
+    
+    User->>Orchestrator: "What is machine learning?"
+    Orchestrator->>GeneralAgent: Route to GENERAL
+    GeneralAgent->>LLM: Direct question
+    LLM-->>GeneralAgent: "Machine learning is..."
+    GeneralAgent-->>Orchestrator: Answer
+    Orchestrator-->>User: Final answer
+```
+
 ## Configuration
 
 ### Environment Variables
@@ -723,6 +784,13 @@ graph LR
 | Vector Search | 10-50ms | ChromaDB |
 | LLM Generation | 1-3s | Depends on context |
 | **Total** | **1-4s** | End-to-end |
+
+### General Agent Performance
+
+| Operation | Time | Notes |
+|-----------|------|-------|
+| LLM Generation | 1-3s | Direct response, no retrieval |
+| **Total** | **1-3s** | End-to-end (fastest route) |
 
 ### Caching Strategy
 

@@ -54,6 +54,7 @@ async def stream_orchestrator_response(
             "sql_result": None,
             "sql_structured_result": None,
             "rag_result": None,
+            "general_result": None,
             "final_answer": None,
             "final_structured_data": None
         }
@@ -88,6 +89,14 @@ async def stream_orchestrator_response(
                     tool_event = StreamEvent(
                         event="tool_start",
                         tool="rag_agent"
+                    )
+                    yield f"data: {tool_event.model_dump_json()}\n\n"
+                elif event_name == "general_agent":
+                    current_node = "general_agent"
+                    # Emit tool start event
+                    tool_event = StreamEvent(
+                        event="tool_start",
+                        tool="general_agent"
                     )
                     yield f"data: {tool_event.model_dump_json()}\n\n"
                 elif event_name == "finalize":
@@ -169,7 +178,7 @@ async def stream_orchestrator_response(
                 outputs = event_data.get("output", {}) if isinstance(event_data, dict) else {}
                 next_step = outputs.get("next_step", "") if isinstance(outputs, dict) else ""
                 
-                if next_step in ["sql", "rag"]:
+                if next_step in ["sql", "rag", "general"]:
                     route_event = StreamEvent(
                         event="route_decision",
                         route=next_step
@@ -266,6 +275,7 @@ async def chat_stream(request: ChatStreamRequest):
     - `classify`: Classification reasoning (usually skipped)
     - `sql_agent`: SQL generation reasoning
     - `rag_agent`: RAG retrieval reasoning
+    - `general_agent`: General LLM response reasoning
     - `final`: Final answer to user
     
     **Node.js Integration:**
@@ -277,6 +287,8 @@ async def chat_stream(request: ChatStreamRequest):
         ui.emit("🔍 Querying database");
       } else if (event.tool === "rag_agent") {
         ui.emit("📚 Searching knowledge base");
+      } else if (event.tool === "general_agent") {
+        ui.emit("💭 Thinking...");
       }
     }
     

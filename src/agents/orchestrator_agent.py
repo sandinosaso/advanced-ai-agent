@@ -4,8 +4,9 @@ Orchestrator Agent - Main LangGraph workflow for Phase 4
 This is the primary agent that routes questions to:
 - SQL Agent (database queries, statistics, calculations)
 - RAG Agent (policies, compliance, handbook questions)
+- General Agent (general questions that don't require SQL or RAG)
 
-Uses LangGraph to create a stateful workflow with intelligent routing.
+Uses LangGraph to create a stateful workflow with intelligent three-way routing.
 """
 
 from typing import Annotated, TypedDict, Dict, Any, Sequence, List, Optional
@@ -27,17 +28,18 @@ class AgentState(TypedDict):
     sql_result: str | None
     sql_structured_result: List[Dict[str, Any]] | None  # Structured array from SQL agent for BFF
     rag_result: str | None
+    general_result: str | None  # General LLM response for non-SQL/non-RAG questions
     final_answer: str | None
     final_structured_data: List[Dict[str, Any]] | None  # Structured data for final answer (BFF markdown)
 
 
 class OrchestratorAgent:
     """
-    Main orchestrator that routes between SQL and RAG agents
+    Main orchestrator that routes between SQL, RAG, and General agents
     
     Workflow:
     1. Receive question
-    2. Classify question type (SQL vs RAG)
+    2. Classify question type (SQL vs RAG vs GENERAL)
     3. Route to appropriate agent
     4. Generate final answer
     5. Return to user
@@ -80,18 +82,20 @@ class OrchestratorAgent:
         """
         Classify question to determine routing
         
-        SQL questions: statistics, counts, calculations, data queries
-        RAG questions: policies, procedures, compliance, rules
+        Three-way classification:
+        - SQL: Database queries requiring data retrieval
+        - RAG: Policy/compliance questions requiring document retrieval
+        - GENERAL: General questions that can be answered directly by LLM
         """
         question = state["question"]
         
-        classification_prompt = f"""Classify this question as either "SQL" or "RAG".
+        classification_prompt = f"""Classify this question as SQL, RAG, or GENERAL.
 
-**SQL** - Use when the question asks about:
-- Specific data, numbers, counts, statistics, calculations
-- Current database state ("how many", "which", "show me", "list all")
-- Work logs, expenses, jobs, technicians, schedules that exist in the database
-- Filtering or aggregating existing records
+**SQL** - ONLY if question requires:
+- Querying specific database records
+- Counting, aggregating, or calculating from stored data
+- Filtering existing records by criteria
+- MUST reference data that exists in the database
 
 SQL Examples:
 - "How many technicians are in the database?"
@@ -100,31 +104,50 @@ SQL Examples:
 - "Show me work logs from last week"
 - "List all technicians with HVAC skills"
 
-**RAG** - Use when the question asks about:
-- Company policies, rules, procedures, guidelines
-- Compliance requirements, safety regulations
-- How-to information from handbooks or documentation
-- General knowledge about company practices
-- Definitions or explanations of policies
+**RAG** - ONLY if question asks about:
+- Company policies, procedures, rules
+- Compliance requirements (OSHA, FLSA, etc.)
+- Handbook information
+- How-to guides from company documentation
+- MUST be answerable from company documents
 
 RAG Examples:
 - "What are the overtime rules?"
 - "What safety equipment is required for electrical work?"
-- "How do I submit expense reports?"
+- "How do I submit expense reports?" (if procedure is in handbook)
 - "What is the company PTO policy?"
 - "What are OSHA lockout/tagout requirements?"
 - "Explain the meal break policy"
 
-IMPORTANT: If asking about RULES or POLICIES, choose RAG even if it mentions data.
-If asking for CURRENT DATA or STATISTICS, choose SQL.
+**GENERAL** - Use for:
+- General knowledge questions
+- Questions not related to business data or policies
+- Explanations, definitions, or general advice
+- Questions that don't require database or document access
+- Questions about general concepts, technology, or non-business topics
+
+GENERAL Examples:
+- "What is machine learning?"
+- "What's the weather today?"
+- "Explain quantum computing"
+- "How does Python work?"
+- "What is artificial intelligence?"
+- "Tell me a joke"
+
+IMPORTANT RULES:
+1. If asking for CURRENT DATA or STATISTICS from the database → SQL
+2. If asking about COMPANY POLICIES or PROCEDURES from documents → RAG
+3. If asking about GENERAL KNOWLEDGE or non-business topics → GENERAL
+4. If unsure between SQL and RAG, prefer SQL for data queries, RAG for policy queries
+5. If question doesn't clearly fit SQL or RAG → GENERAL
 
 Question: {question}
 
-Respond with ONLY one word: SQL or RAG"""
+Respond with ONLY one word: SQL, RAG, or GENERAL"""
         
         try:
             response = self.llm.invoke([HumanMessage(content=classification_prompt)])
-            classification = str(response.content).strip().upper() if hasattr(response, 'content') and response.content else "RAG"
+            classification = str(response.content).strip().upper() if hasattr(response, 'content') and response.content else "GENERAL"
         except Exception as e:
             error_msg = str(e)
             # Check for common Ollama errors
@@ -139,9 +162,9 @@ Respond with ONLY one word: SQL or RAG"""
             raise
         
         # Validate classification
-        if classification not in ["SQL", "RAG"]:
-            logger.warning(f"Invalid classification '{classification}', defaulting to RAG")
-            classification = "RAG"
+        if classification not in ["SQL", "RAG", "GENERAL"]:
+            logger.warning(f"Invalid classification '{classification}', defaulting to GENERAL")
+            classification = "GENERAL"
         
         logger.info(f"Question classified as: {classification}")
         
@@ -219,6 +242,28 @@ Respond with ONLY one word: SQL or RAG"""
         
         return state
     
+    def _execute_general_agent(self, state: AgentState) -> AgentState:
+        """Execute general agent for questions that don't require SQL or RAG"""
+        question = state["question"]
+        
+        logger.info(f"Executing general agent for: '{question}'")
+        
+        try:
+            # Use LLM directly to answer general questions
+            # This is a simple direct response without database or document retrieval
+            response = self.llm.invoke([HumanMessage(content=question)])
+            answer = response.content if hasattr(response, 'content') and response.content else "I couldn't generate an answer. Please try again."
+            
+            state["general_result"] = answer
+            state["messages"].append(AIMessage(content=f"General Answer: {answer}"))
+            state["next_step"] = "finalize"
+        except Exception as e:
+            logger.error(f"General agent error: {e}")
+            state["general_result"] = f"Error: {str(e)}"
+            state["next_step"] = "finalize"
+        
+        return state
+    
     def _finalize_answer(self, state: AgentState) -> AgentState:
         """
         Finalize the answer and prepare for return
@@ -229,7 +274,7 @@ Respond with ONLY one word: SQL or RAG"""
         Also preserves structured_data for BFF markdown conversion.
         """
         
-        # Determine which result to use
+        # Determine which result to use (priority: SQL > RAG > GENERAL)
         if state.get("sql_result"):
             raw_answer = state["sql_result"]
             # Preserve structured data from SQL agent for BFF
@@ -237,6 +282,9 @@ Respond with ONLY one word: SQL or RAG"""
         elif state.get("rag_result"):
             raw_answer = state["rag_result"]
             state["final_structured_data"] = None  # RAG doesn't have structured data
+        elif state.get("general_result"):
+            raw_answer = state["general_result"]
+            state["final_structured_data"] = None  # General doesn't have structured data
         else:
             raw_answer = "I couldn't find an answer to your question."
             state["final_structured_data"] = None
@@ -259,19 +307,21 @@ Respond with ONLY one word: SQL or RAG"""
     
     def _route_after_classification(self, state: AgentState) -> str:
         """Determine next node after classification"""
-        next_step = state.get("next_step", "rag")
+        next_step = state.get("next_step", "general")
         
         if next_step == "sql":
             return "sql_agent"
-        else:
+        elif next_step == "rag":
             return "rag_agent"
+        else:
+            return "general_agent"
     
     def _build_workflow(self) -> StateGraph:
         """
         Build the LangGraph workflow
         
         Graph structure:
-        START → classify → [sql_agent OR rag_agent] → finalize → END
+        START → classify → [sql_agent OR rag_agent OR general_agent] → finalize → END
         """
         workflow = StateGraph(AgentState)
         
@@ -279,6 +329,7 @@ Respond with ONLY one word: SQL or RAG"""
         workflow.add_node("classify", self._classify_question)
         workflow.add_node("sql_agent", self._execute_sql_agent)
         workflow.add_node("rag_agent", self._execute_rag_agent)
+        workflow.add_node("general_agent", self._execute_general_agent)
         workflow.add_node("finalize", self._finalize_answer)
         
         # Add edges
@@ -290,13 +341,15 @@ Respond with ONLY one word: SQL or RAG"""
             self._route_after_classification,
             {
                 "sql_agent": "sql_agent",
-                "rag_agent": "rag_agent"
+                "rag_agent": "rag_agent",
+                "general_agent": "general_agent"
             }
         )
         
-        # Both agents go to finalize
+        # All agents go to finalize
         workflow.add_edge("sql_agent", "finalize")
         workflow.add_edge("rag_agent", "finalize")
+        workflow.add_edge("general_agent", "finalize")
         
         # Finalize goes to END
         workflow.add_edge("finalize", END)
@@ -326,6 +379,7 @@ Respond with ONLY one word: SQL or RAG"""
             "sql_result": None,
             "sql_structured_result": None,
             "rag_result": None,
+            "general_result": None,
             "final_answer": None,
             "final_structured_data": None
         }
@@ -333,13 +387,22 @@ Respond with ONLY one word: SQL or RAG"""
         # Run workflow
         final_state = self.workflow.invoke(initial_state)
         
+        # Determine route taken
+        if final_state.get("sql_result"):
+            route = "sql"
+        elif final_state.get("rag_result"):
+            route = "rag"
+        else:
+            route = "general"
+        
         # Extract results
         result = {
             "question": question,
             "answer": final_state.get("final_answer", "No answer generated"),
-            "route": "sql" if final_state.get("sql_result") else "rag",
+            "route": route,
             "sql_result": final_state.get("sql_result"),
             "rag_result": final_state.get("rag_result"),
+            "general_result": final_state.get("general_result"),
             "messages": final_state.get("messages", [])
         }
         

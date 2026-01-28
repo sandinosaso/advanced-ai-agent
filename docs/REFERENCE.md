@@ -178,7 +178,7 @@ data: {"event":"complete","stats":{"tokens":15}}
 
 | Event | Fields | Description |
 |-------|--------|-------------|
-| `route_decision` | `route` | SQL or RAG routing decision |
+| `route_decision` | `route` | SQL, RAG, or GENERAL routing decision |
 | `tool_start` | `tool` | Tool execution started |
 | `token` | `channel`, `content` | Content token |
 | `complete` | `stats` | Stream finished |
