@@ -708,13 +708,23 @@ Return ONLY the SQL query, nothing else.
         import re
         # Extract from FROM and JOIN clauses
         table_pattern = r'\b(?:FROM|JOIN|INTO|UPDATE)\s+([a-zA-Z_][a-zA-Z0-9_]*)'
-        tables_in_sql = set(re.findall(table_pattern, sql, re.IGNORECASE))
+        tables_in_sql = set()
+        # Extract tables from FROM/JOIN clauses and convert to base tables
+        for table in re.findall(table_pattern, sql, re.IGNORECASE):
+            # Convert secure view to base table for lookup (single source of truth)
+            base_table = from_secure_view(table)
+            tables_in_sql.add(base_table)
+            logger.debug(f"Extracted table from FROM/JOIN: {table} -> {base_table}")
+        
         # Also extract from table.column patterns (SELECT, WHERE, ON, etc.)
         column_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)'
         for table, _ in re.findall(column_pattern, sql):
             # Convert secure view to base table for lookup (single source of truth)
             base_table = from_secure_view(table)
             tables_in_sql.add(base_table)
+            logger.debug(f"Extracted table from table.column pattern: {table} -> {base_table}")
+        
+        logger.info(f"Tables found in SQL query (after conversion to base tables): {sorted(tables_in_sql)}")
         
         # Build relevant table schemas (only tables used in query)
         table_schemas = []
@@ -726,6 +736,10 @@ Return ONLY the SQL query, nothing else.
                 if len(columns) > settings.sql_max_columns_in_correction:
                     columns_str += f" ... ({len(columns)} total columns)"
                 table_schemas.append(f"{table_name}: {columns_str}")
+            else:
+                logger.warning(f"Table {table_name} not found in join_graph, skipping schema")
+        
+        logger.info(f"Built schemas for {len(table_schemas)} tables: {[s.split(':')[0] for s in table_schemas]}")
         
         # Get relevant relationships (only between tables in query)
         relevant_relationships = []
