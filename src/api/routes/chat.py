@@ -11,10 +11,29 @@ from typing import AsyncGenerator
 from loguru import logger
 
 from src.api.models import ChatStreamRequest, StreamEvent
-from src.agents.orchestrator_agent import OrchestratorAgent
+from src.agents.orchestrator_agent import get_orchestrator_agent
+from src.models.conversation_db import get_conversation_db
+from langchain_core.messages import HumanMessage
+import asyncio
 
 
 router = APIRouter(prefix="/internal/chat", tags=["internal"])
+
+# Initialize conversation database on module load
+conversation_db = get_conversation_db()
+
+# Get shared agent instance (singleton)
+_agent = None
+
+def get_agent():
+    """Get shared agent instance"""
+    global _agent
+    if _agent is None:
+        _agent = get_orchestrator_agent(
+            checkpointer=conversation_db.get_checkpointer(),
+            conversation_db=conversation_db
+        )
+    return _agent
 
 
 async def stream_orchestrator_response(
@@ -42,15 +61,64 @@ async def stream_orchestrator_response(
         logger.info(f"Stream started - conversation={conversation_id}, user={user_id}, company={company_id}")
         logger.debug(f"Message: {message[:100]}...")
         
-        # Initialize agent
-        agent = OrchestratorAgent()
+        # Get shared agent (reused across requests)
+        agent = get_agent()
         
-        # Prepare initial state
-        # TODO: Load conversation history from database using conversation_id
+        # Use conversation_id as thread_id for checkpointing
+        config = {"configurable": {"thread_id": conversation_id}}
+        
+        # CRITICAL: Initial state handling for checkpointing
+        # According to plan: initial_state fields OVERRIDE checkpoint fields
+        # This means if we pass messages: [new_message], it replaces checkpoint messages
+        # 
+        # Solution: Manually load checkpoint messages first, then merge with new message
+        # This ensures we preserve conversation history
+        checkpoint_messages = []
+        if agent.checkpointer:
+            try:
+                # Try to load the latest checkpoint for this thread_id
+                # LangGraph checkpoint API: get() returns checkpoint with channel_values
+                # Load checkpoint tuple - AsyncSqliteSaver uses aget_tuple()
+                if hasattr(agent.checkpointer, 'aget_tuple'):
+                    # Async checkpointer (AsyncSqliteSaver)
+                    checkpoint_tuple = await agent.checkpointer.aget_tuple(config)
+                elif hasattr(agent.checkpointer, 'get_tuple'):
+                    # Sync checkpointer - run in executor to avoid blocking
+                    import asyncio
+                    checkpoint_tuple = await asyncio.to_thread(agent.checkpointer.get_tuple, config)
+                else:
+                    checkpoint_tuple = None
+                
+                if checkpoint_tuple:
+                    # CheckpointTuple is a named tuple with structure:
+                    # (config, checkpoint, metadata, parent_config, writes)
+                    # Access checkpoint (second element) which has channel_values
+                    checkpoint = checkpoint_tuple.checkpoint if hasattr(checkpoint_tuple, 'checkpoint') else checkpoint_tuple[1]
+                    
+                    if isinstance(checkpoint, dict):
+                        # LangGraph checkpoint structure: {channel_values: {messages: [...]}}
+                        channel_values = checkpoint.get("channel_values", {})
+                        if channel_values and "messages" in channel_values:
+                            checkpoint_messages = list(channel_values["messages"])
+                        # Try direct messages field (fallback)
+                        elif "messages" in checkpoint:
+                            checkpoint_messages = list(checkpoint["messages"])
+                    
+                    if checkpoint_messages:
+                        logger.debug(f"Loaded {len(checkpoint_messages)} messages from checkpoint")
+            except Exception as e:
+                # No checkpoint exists (first message) or error loading - this is OK
+                logger.debug(f"No checkpoint found or error loading (first message?): {e}")
+        
+        # Merge checkpoint messages with new message
+        # Checkpoint messages come first, then new message
+        all_messages = checkpoint_messages + [HumanMessage(content=message)]
+        
+        # Create initial state with merged messages
         initial_state = {
-            "messages": [],
-            "question": message,
-            "next_step": "classify",
+            "question": message,  # New field
+            "next_step": "classify",  # New field
+            "messages": all_messages,  # Merged: checkpoint messages + new message
             "sql_result": None,
             "sql_structured_result": None,
             "rag_result": None,
@@ -65,8 +133,8 @@ async def stream_orchestrator_response(
         final_structured_data = None  # Track structured data for final answer
         first_final_token = True  # Track if this is the first token in final channel
         
-        # Stream events from the agent workflow
-        async for event in agent.astream_events(initial_state, version="v1"):
+        # Stream events from the agent workflow with checkpointing config
+        async for event in agent.astream_events(initial_state, config=config, version="v1"):
             event_type = event.get("event")
             event_name = event.get("name", "")
             
@@ -199,8 +267,78 @@ async def stream_orchestrator_response(
         
     except Exception as e:
         error_message = str(e) if e else "Unknown error"
+        error_msg_lower = error_message.lower()
+        
+        # Check for checkpoint/database errors
+        if "database is locked" in error_msg_lower or "sqlite" in error_msg_lower:
+            logger.warning(f"Database error, retrying: {e}")
+            # Retry once with backoff
+            await asyncio.sleep(0.1)
+            try:
+                # Retry the same operation - reuse existing event processing
+                agent = get_agent()
+                config = {"configurable": {"thread_id": conversation_id}}
+                # Reuse the same event processing loop (would need to refactor to avoid duplication)
+                # For now, just log and fall through to fallback
+                logger.warning("Retry not fully implemented, falling back to stateless mode")
+            except Exception as retry_e:
+                logger.error(f"Retry failed: {retry_e}")
+                # Fall through to fallback
+        
+        # Fallback: Use stateless mode (no checkpointing)
+        logger.warning(f"Checkpoint failed, falling back to stateless mode: {e}")
+        try:
+            from src.agents.orchestrator_agent import OrchestratorAgent
+            fallback_agent = OrchestratorAgent()  # No checkpointer
+            
+            # Create fresh initial state for fallback
+            fallback_initial_state = {
+                "question": message,
+                "next_step": "classify",
+                "messages": [HumanMessage(content=message)],
+                "sql_result": None,
+                "sql_structured_result": None,
+                "rag_result": None,
+                "general_result": None,
+                "final_answer": None,
+                "final_structured_data": None
+            }
+            
+            async for event in fallback_agent.astream_events(fallback_initial_state, version="v1"):
+                # Reuse existing event processing logic
+                event_type = event.get("event")
+                event_name = event.get("name", "")
+                
+                if event_type in ["on_chain_start", "on_llm_start"]:
+                    if event_name == "sql_agent":
+                        tool_event = StreamEvent(event="tool_start", tool="sql_agent")
+                        yield f"data: {tool_event.model_dump_json()}\n\n"
+                    elif event_name == "rag_agent":
+                        tool_event = StreamEvent(event="tool_start", tool="rag_agent")
+                        yield f"data: {tool_event.model_dump_json()}\n\n"
+                    elif event_name == "general_agent":
+                        tool_event = StreamEvent(event="tool_start", tool="general_agent")
+                        yield f"data: {tool_event.model_dump_json()}\n\n"
+                
+                if event_type == "on_chat_model_stream":
+                    event_data = event.get("data")
+                    if event_data and isinstance(event_data, dict):
+                        chunk = event_data.get("chunk")
+                        if chunk and hasattr(chunk, "content") and chunk.content:
+                            token_event = StreamEvent(
+                                event="token",
+                                channel="final",
+                                content=chunk.content
+                            )
+                            yield f"data: {token_event.model_dump_json()}\n\n"
+            
+            complete_event = StreamEvent(event="complete", stats={"tokens": 0, "conversation_id": conversation_id})
+            yield f"data: {complete_event.model_dump_json()}\n\n"
+            return
+        except Exception as fallback_e:
+            logger.error(f"Fallback also failed: {fallback_e}")
+        
         # Log error - use logger.exception to capture full traceback
-        # Avoid f-strings with error messages that might contain curly braces
         logger.exception("Stream error occurred")
         # Send error event
         try:

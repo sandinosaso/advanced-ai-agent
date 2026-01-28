@@ -12,9 +12,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from loguru import logger
+import asyncio
 
 from src.api.routes import chat
 from src.api.models import HealthResponse
+from src.models.conversation_db import get_conversation_db
+from src.utils.config import settings
 
 
 @asynccontextmanager
@@ -23,18 +26,61 @@ async def lifespan(app: FastAPI):
     Application lifespan events
     
     Handles startup and shutdown tasks:
-    - Startup: Log application start, initialize resources
-    - Shutdown: Cleanup resources, close connections
+    - Startup: Log application start, initialize resources, start cleanup task
+    - Shutdown: Cleanup resources, close connections, cancel cleanup task
     """
     # Startup
     logger.info("🚀 FastAPI application starting...")
     logger.info("📚 API docs available at http://localhost:8000/docs")
     logger.info("🔄 Streaming endpoint at http://localhost:8000/api/chat/stream")
     
+    # Initialize conversation database and run initial cleanup
+    conversation_db = get_conversation_db()
+    
+    # Initialize async connection and checkpointer
+    await conversation_db.async_init()
+    
+    try:
+        deleted = await conversation_db.cleanup_old_conversations(max_age_hours=settings.conversation_max_age_hours)
+        if deleted > 0:
+            logger.info(f"🧹 Cleaned up {deleted} old conversations on startup")
+    except Exception as e:
+        logger.error(f"Initial cleanup failed: {e}")
+    
+    # Start background cleanup task
+    async def periodic_cleanup():
+        """Periodically clean up old conversations"""
+        while True:
+            try:
+                await asyncio.sleep(settings.conversation_cleanup_interval_hours * 3600)
+                deleted = await conversation_db.cleanup_old_conversations(max_age_hours=settings.conversation_max_age_hours)
+                if deleted > 0:
+                    logger.info(f"🧹 Periodic cleanup: removed {deleted} old conversations")
+            except asyncio.CancelledError:
+                logger.info("Cleanup task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Periodic cleanup failed: {e}")
+    
+    cleanup_task = asyncio.create_task(periodic_cleanup())
+    
     yield
     
     # Shutdown
     logger.info("🛑 FastAPI application shutting down...")
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("✅ Cleanup task stopped")
+    
+    # Close conversation database checkpointer
+    try:
+        await conversation_db.close()
+        logger.info("✅ Conversation database closed")
+    except Exception as e:
+        logger.warning(f"Error closing conversation database: {e}")
 
 
 # Create FastAPI application

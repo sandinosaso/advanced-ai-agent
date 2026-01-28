@@ -102,6 +102,15 @@ class Settings(BaseSettings):
     max_output_tokens: int = Field(default=4000)
     max_query_rows: int = Field(default=100)
     
+    # Conversation Memory Configuration
+    conversation_db_path: str = Field(default="data/conversations.db")
+    conversation_max_age_hours: int = Field(default=24)
+    conversation_cleanup_interval_hours: int = Field(default=1)
+    max_conversation_messages: int = Field(default=20)
+    conversation_memory_strategy: str = Field(default="simple")  # "simple" | "tiered" (for future)
+    conversation_db_retry_attempts: int = Field(default=3)
+    conversation_db_retry_delay: float = Field(default=0.1)
+    
     class Config:
         env_file = str(_project_root / ".env")
         env_file_encoding = "utf-8"
@@ -110,6 +119,14 @@ class Settings(BaseSettings):
 
 # Create global settings instance
 settings = Settings()
+
+# Resolve conversation DB path to absolute
+_conversation_db_path = Path(settings.conversation_db_path)
+if not _conversation_db_path.is_absolute():
+    _conversation_db_path = _project_root / _conversation_db_path
+
+# Store resolved path as attribute (for use in conversation_db.py)
+settings.conversation_db_path_resolved = str(_conversation_db_path)
 
 
 def _validate_ollama_model():

@@ -69,9 +69,10 @@ data: {"event":"complete","stats":{"tokens":15}}
 ```mermaid
 graph TB
     User[User Question] --> Orchestrator[Orchestrator Agent]
+    Orchestrator --> Checkpoint[(SQLite Checkpoint<br/>Conversation Memory)]
     Orchestrator --> Classify{Classify Question}
     Classify -->|SQL Query| SQLAgent[SQL Graph Agent]
-    Classify -->|Policy/Knowledge| RAGAgent[RAG Agent]
+    Classify -->|System Usage| RAGAgent[RAG Agent]
     Classify -->|General Question| GeneralAgent[General Agent]
     
     SQLAgent --> TableSelector[Table Selector]
@@ -99,46 +100,57 @@ graph TB
     style MySQL fill:#F39C12
     style VectorStore fill:#9B59B6
     style LLM fill:#3498DB
+    style Checkpoint fill:#50C878
 ```
 
 ## Core Agents
 
 ### 1. Orchestrator Agent
 
-The main entry point that routes questions to appropriate agents.
+The main entry point that routes questions to appropriate agents. Maintains conversation memory using LangGraph checkpointing.
 
 **Location**: `src/agents/orchestrator_agent.py`
 
 **Workflow**:
 ```mermaid
 stateDiagram-v2
-    [*] --> Classify
+    [*] --> LoadCheckpoint: Load State<br/>from Checkpoint
+    LoadCheckpoint --> Classify
     Classify --> SQL: Database Query
-    Classify --> RAG: Policy/Knowledge
+    Classify --> RAG: System Usage
     Classify --> GENERAL: General Question
     SQL --> Finalize
     RAG --> Finalize
     GENERAL --> Finalize
-    Finalize --> [*]
+    Finalize --> SaveCheckpoint: Save State<br/>to Checkpoint
+    SaveCheckpoint --> [*]
 ```
 
 **Responsibilities**:
 - Classifies user questions (SQL vs RAG vs GENERAL)
 - Routes to SQL Agent, RAG Agent, or General Agent
 - Formats final answers
-- Manages conversation state
+- Manages conversation state with LangGraph checkpointing
+- Maintains conversation memory across multiple messages
+
+**Memory Implementation**:
+- Uses `AsyncSqliteSaver` for async checkpoint persistence
+- Manually loads checkpoint messages before workflow execution
+- Merges checkpoint history with new message to preserve context
+- Truncates messages before LLM calls to respect token limits
+- Singleton agent instance reuses compiled workflow with checkpointer
 
 **State Schema**:
 ```python
 class AgentState(TypedDict):
-    messages: List[BaseMessage]    # Conversation history
-    question: str                   # User question
-    next_step: str                  # Routing decision
-    sql_result: str | None          # SQL agent output
+    messages: Sequence[BaseMessage]  # Conversation history (persisted via checkpointing)
+    question: str                     # User question
+    next_step: str                    # Routing decision
+    sql_result: str | None            # SQL agent output
     sql_structured_result: List[Dict[str, Any]] | None  # Structured data from SQL
-    rag_result: str | None          # RAG agent output
-    general_result: str | None      # General agent output
-    final_answer: str | None        # Final response
+    rag_result: str | None            # RAG agent output
+    general_result: str | None        # General agent output
+    final_answer: str | None          # Final response
     final_structured_data: List[Dict[str, Any]] | None  # Structured data for BFF
 ```
 
@@ -239,10 +251,9 @@ graph LR
 ```
 
 **Data Sources**:
-- Company handbook
-- Compliance documents (OSHA, FLSA)
-- State regulations
-- Work log descriptions
+- User manual (core.md, customers.md, work-orders.md)
+- System usage documentation
+- Feature guides and workflows
 
 ### 4. General Agent
 
@@ -868,10 +879,158 @@ graph LR
 
 **Benefit**: Self-healing SQL generation, reduces manual intervention, improves reliability.
 
+## Conversation Memory
+
+The system uses LangGraph's native SQLite checkpointing to maintain conversation context across multiple messages. This enables the agent to remember previous questions and answers, making conversations feel natural and contextual.
+
+### Architecture
+
+```mermaid
+graph TB
+    Request[Chat Request<br/>conversation_id] --> LoadCheckpoint[Manually Load<br/>Checkpoint Messages]
+    LoadCheckpoint --> Merge[Merge Checkpoint<br/>+ New Message]
+    Merge --> Orchestrator[Orchestrator Agent<br/>with AsyncSqliteSaver]
+    Orchestrator --> Execute[Execute Workflow<br/>with State]
+    Execute --> SaveState[Auto-Save State<br/>to SQLite Checkpoint]
+    SaveState --> Response[Stream Response]
+    
+    Cleanup[Background Cleanup<br/>24h old conversations] --> LoadCheckpoints[Load Checkpoints<br/>to Check Timestamps]
+    LoadCheckpoints --> DeleteOld[Delete Old Threads]
+    DeleteOld --> SQLite[(SQLite<br/>conversations.db)]
+    SaveState --> SQLite
+    LoadCheckpoint --> SQLite
+    
+    Init[FastAPI Startup] --> AsyncInit[Async Initialize<br/>ConversationDatabase]
+    AsyncInit --> SQLite
+    
+    style Orchestrator fill:#4A90E2
+    style SQLite fill:#50C878
+    style Cleanup fill:#FF6B6B
+    style AsyncInit fill:#9B59B6
+```
+
+### Implementation Details
+
+**Location**: `src/models/conversation_db.py` and `src/api/routes/chat.py`
+
+**Key Components**:
+
+1. **ConversationDatabase**: Abstraction layer for conversation storage
+   - **Async Initialization**: Uses `AsyncSqliteSaver` with `aiosqlite` for async operations
+   - Initializes SQLite connection with WAL mode for concurrency
+   - Creates `AsyncSqliteSaver` instance directly with connection (not context manager)
+   - Provides checkpointer instance for LangGraph workflow compilation
+   - Handles message truncation and memory management
+   - Manages cleanup of old conversations by loading checkpoints to check timestamps
+   - Singleton pattern: Single instance shared across all requests
+
+2. **Checkpointing**: LangGraph's native state persistence
+   - Uses `thread_id` (mapped from `conversation_id`) to isolate conversations
+   - **Manual State Loading**: Before workflow execution, checkpoint messages are manually loaded using `aget_tuple()`
+   - **State Merging**: Checkpoint messages are merged with the new user message before creating `initial_state`
+   - This prevents `initial_state` from overriding checkpoint state (LangGraph's default behavior)
+   - Automatically saves state after each workflow node execution
+   - Uses async checkpoint API (`aget_tuple`, `aput`) for non-blocking operations
+
+3. **Message Truncation**: Respects token limits
+   - Configurable via `MAX_CONVERSATION_MESSAGES` (default: 20)
+   - Keeps most recent messages (last N)
+   - Applied before each LLM call (`_classify_question`, `_execute_general_agent`, etc.)
+   - Truncation happens in memory, not in database (preserves full history)
+
+4. **Cleanup**: Automatic removal of old conversations
+   - Runs periodically (configurable interval, default: 1 hour)
+   - Loads each thread's latest checkpoint to extract timestamp from checkpoint BLOB
+   - Deletes conversations older than 24 hours (configurable) using `adelete_thread()`
+   - Background task runs during FastAPI lifespan (startup/shutdown)
+   - Initial cleanup runs on application startup
+
+### State Management
+
+**AgentState Schema**:
+```python
+class AgentState(TypedDict):
+    messages: Sequence[BaseMessage]  # Conversation history (persisted)
+    question: str                    # Current question
+    next_step: str                   # Routing decision
+    sql_result: str | None
+    rag_result: str | None
+    general_result: str | None
+    final_answer: str | None
+    # ... other fields
+```
+
+**Checkpoint Behavior**:
+- **Manual Loading**: Before workflow execution, checkpoint messages are manually loaded using `checkpointer.aget_tuple(config)`
+- **State Merging**: Checkpoint messages are explicitly merged with new message: `all_messages = checkpoint_messages + [HumanMessage(content=new_message)]`
+- **Initial State**: Merged messages are passed as `initial_state["messages"]` to prevent LangGraph from overriding checkpoint state
+- **Automatic Saving**: LangGraph automatically saves state after each node execution
+- **Thread Isolation**: Each `conversation_id` maps to a unique `thread_id` for complete isolation
+
+### Configuration
+
+**Environment Variables**:
+```bash
+CONVERSATION_DB_PATH=data/conversations.db          # SQLite database path (resolved to absolute)
+CONVERSATION_MAX_AGE_HOURS=24                        # Delete conversations older than this
+CONVERSATION_CLEANUP_INTERVAL_HOURS=1               # How often to run cleanup task
+MAX_CONVERSATION_MESSAGES=20                         # Max messages to keep in context
+CONVERSATION_MEMORY_STRATEGY=simple                 # Memory strategy (simple/tiered)
+CONVERSATION_DB_RETRY_ATTEMPTS=3                    # Retry attempts for locked DB
+CONVERSATION_DB_RETRY_DELAY=0.1                     # Initial retry delay (seconds)
+```
+
+**Dependencies**:
+- `langgraph-checkpoint-sqlite>=1.0.0`: LangGraph SQLite checkpointing
+- `aiosqlite>=0.20.0`: Async SQLite support for `AsyncSqliteSaver`
+
+### Error Handling
+
+- **Database locked**: Retry with exponential backoff (up to `CONVERSATION_DB_RETRY_ATTEMPTS`)
+- **Checkpoint loading failure**: Log warning, start fresh conversation (no previous context)
+- **Checkpoint saving failure**: Fallback to stateless mode (request succeeds, but no memory saved)
+- **Corrupt checkpoint**: Log error, start fresh conversation
+- **Missing thread_id**: Create new checkpoint (first message in conversation)
+- **Async initialization failure**: Application startup fails (critical error)
+- **Cleanup failure**: Log error, continue operation (non-critical)
+
+### Concurrency & Performance
+
+- **WAL mode**: SQLite Write-Ahead Logging enables concurrent reads
+- **Async operations**: Uses `AsyncSqliteSaver` with `aiosqlite` for non-blocking I/O
+- **Singleton pattern**: 
+  - `ConversationDatabase`: Single instance initialized at FastAPI startup
+  - `OrchestratorAgent`: Single instance reused across all requests (compiled workflow with checkpointer)
+- **Connection Management**: Single persistent `aiosqlite.Connection` kept open for the application lifetime
+- **Timeout**: 5 second wait for database locks (`PRAGMA busy_timeout=5000`)
+- **Error Handling**: Retry logic for "database locked" errors with exponential backoff
+- **Fallback**: If checkpointing fails, falls back to stateless mode (no memory, but request succeeds)
+
+### Future Extensions
+
+**Tiered Memory** (designed but not implemented):
+- Short-term: Last 10 messages (full detail)
+- Medium-term: Messages 10-50 (summarized)
+- Long-term: Full conversation summary
+
+**Migration Path**:
+- Abstraction layer (`ConversationDatabase`) allows swapping SQLite → MySQL/Redis
+- Checkpointer interface is standardized (LangGraph's `BaseCheckpointSaver`)
+- Easy to extend with entity memory, user preferences
+- Supports conversation branching and time-travel debugging
+- Current implementation uses direct connection (not context manager) for persistent use
+
+**Implementation Notes**:
+- `AsyncSqliteSaver` is instantiated directly with `aiosqlite.Connection` (not via `from_conn_string()` context manager)
+- Connection is kept open for application lifetime and closed on shutdown
+- Checkpoint timestamps are stored in checkpoint BLOB (not as separate column), requiring checkpoint loading for cleanup
+- Singleton pattern ensures single agent instance with compiled workflow (performance optimization)
+
 ## Future Enhancements
 
-1. **Memory Management**: Conversation history with LangGraph checkpointing
+1. **Tiered Memory**: Implement summarization for long conversations
 2. **Query Optimization**: Cost-based query plan analysis
 3. **Semantic Table Selection**: Use embeddings to find relevant tables
 4. **Multi-Tenancy**: Company-specific data isolation
 5. **Monitoring**: LangSmith integration, metrics, tracing
+6. **Entity Memory**: Remember mentioned technicians, jobs, dates across conversations

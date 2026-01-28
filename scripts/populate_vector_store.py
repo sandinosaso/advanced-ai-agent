@@ -1,22 +1,26 @@
 """
-Populate vector store with Phase 3 documents
+Populate vector store with user manual documents
 
 This script:
-1. Loads all mock documents (handbook, compliance)
+1. Loads all markdown files from data/manual/ directory
 2. Chunks them using appropriate strategies
 3. Generates embeddings with caching
 4. Stores in ChromaDB collections
 """
 
+import sys
+import os
 from pathlib import Path
+from typing import List, Dict, Any
+import re
+
+# Add project root to Python path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+os.chdir(project_root)
+
 from loguru import logger
 
-from src.services.mock_documents import (
-    COMPANY_HANDBOOK,
-    FEDERAL_COMPLIANCE_OSHA,
-    FEDERAL_COMPLIANCE_FLSA,
-    STATE_COMPLIANCE_EXAMPLE
-)
 from src.utils.rag.chunking_strategies import (
     chunk_document,
     DocumentStructureChunking,
@@ -26,16 +30,94 @@ from src.utils.rag.embedding_service import EmbeddingService
 from src.utils.rag.vector_store import VectorStore
 
 
+def get_project_root() -> Path:
+    """Get project root directory"""
+    # This file is at scripts/populate_vector_store.py
+    # Project root is parent of scripts/
+    return Path(__file__).parent.parent
+
+
+def load_manual_documents(data_dir: Path) -> List[Dict[str, Any]]:
+    """
+    Load all markdown files from data/manual/ directory
+    
+    Args:
+        data_dir: Path to data directory (project_root/data)
+    
+    Returns:
+        List of document dictionaries with name, text, type, collection, and metadata
+    """
+    manual_dir = data_dir / "manual"
+    
+    if not manual_dir.exists():
+        logger.error(f"Manual directory not found: {manual_dir}")
+        return []
+    
+    documents = []
+    
+    # Find all markdown files
+    md_files = sorted(manual_dir.glob("*.md"))
+    
+    if not md_files:
+        logger.warning(f"No markdown files found in {manual_dir}")
+        return []
+    
+    for md_file in md_files:
+        try:
+            with open(md_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Extract module name from filename (e.g., "core", "customers", "work-orders")
+            module_name = md_file.stem
+            
+            # Try to extract version from file header if present
+            version = "1.0"  # Default version
+            lines = content.split('\n', 10)
+            for line in lines:
+                if 'version' in line.lower() or 'Version' in line:
+                    # Try to extract version number
+                    version_match = re.search(r'(\d+\.\d+)', line)
+                    if version_match:
+                        version = version_match.group(1)
+                        break
+            
+            documents.append({
+                "name": f"User Manual - {module_name.replace('-', ' ').title()}",
+                "text": content,
+                "type": "manual",
+                "collection": "manual",
+                "metadata": {
+                    "source": module_name,
+                    "document_type": "user_manual",
+                    "module": module_name,
+                    "file_path": str(md_file.relative_to(data_dir)),
+                    "version": version
+                }
+            })
+            
+            logger.debug(f"Loaded manual document: {md_file.name} ({len(content):,} chars)")
+            
+        except Exception as e:
+            logger.error(f"Failed to load {md_file}: {e}")
+            continue
+    
+    return documents
+
+
 def populate_vector_store(reset: bool = False) -> None:
     """
-    Populate vector store with all documents
+    Populate vector store with user manual documents
     
     Args:
         reset: If True, delete existing collections first
     """
     logger.info("="*60)
-    logger.info("Populating Vector Store with Phase 3 Documents")
+    logger.info("Populating Vector Store with User Manual Documents")
     logger.info("="*60)
+    
+    # Get project root and data directory
+    project_root = get_project_root()
+    data_dir = project_root / "data"
     
     # Initialize services
     embedding_service = EmbeddingService(enable_cache=True)
@@ -45,56 +127,14 @@ def populate_vector_store(reset: bool = False) -> None:
         logger.warning("Resetting all collections...")
         vector_store.reset_all()
     
-    # Document catalog
-    documents = [
-        {
-            "name": "Company Handbook",
-            "text": COMPANY_HANDBOOK,
-            "type": "handbook",
-            "collection": "handbook",
-            "metadata": {
-                "source": "company_handbook",
-                "version": "2026.1",
-                "document_type": "handbook"
-            }
-        },
-        {
-            "name": "Federal OSHA Compliance",
-            "text": FEDERAL_COMPLIANCE_OSHA,
-            "type": "compliance",
-            "collection": "compliance",
-            "metadata": {
-                "source": "federal_osha",
-                "jurisdiction": "federal",
-                "regulation": "OSHA",
-                "document_type": "compliance"
-            }
-        },
-        {
-            "name": "Federal FLSA Compliance",
-            "text": FEDERAL_COMPLIANCE_FLSA,
-            "type": "compliance",
-            "collection": "compliance",
-            "metadata": {
-                "source": "federal_flsa",
-                "jurisdiction": "federal",
-                "regulation": "FLSA",
-                "document_type": "compliance"
-            }
-        },
-        {
-            "name": "State Compliance (California)",
-            "text": STATE_COMPLIANCE_EXAMPLE,
-            "type": "compliance",
-            "collection": "compliance",
-            "metadata": {
-                "source": "state_california",
-                "jurisdiction": "state",
-                "state": "CA",
-                "document_type": "compliance"
-            }
-        }
-    ]
+    # Load manual documents from data/manual/ directory
+    documents = load_manual_documents(data_dir)
+    
+    if not documents:
+        logger.error("No documents loaded. Exiting.")
+        return
+    
+    logger.info(f"Loaded {len(documents)} manual document(s)")
     
     total_chunks = 0
     
@@ -103,8 +143,8 @@ def populate_vector_store(reset: bool = False) -> None:
         logger.info(f"  Length: {len(doc['text']):,} characters")
         
         # Chunk document using appropriate strategy
-        if doc['type'] in ('handbook', 'compliance'):
-            # Use document structure chunking for well-structured docs
+        if doc['type'] == 'manual':
+            # Use document structure chunking for well-structured markdown docs
             strategy = DocumentStructureChunking(
                 chunk_size=1000,
                 chunk_overlap=100
@@ -177,7 +217,7 @@ def populate_vector_store(reset: bool = False) -> None:
 
 
 def test_search() -> None:
-    """Test search functionality with sample queries"""
+    """Test search functionality with system usage queries"""
     logger.info("\n" + "="*60)
     logger.info("Testing Search Functionality")
     logger.info("="*60 + "\n")
@@ -185,11 +225,11 @@ def test_search() -> None:
     vector_store = VectorStore()
     
     test_queries = [
-        ("What are the overtime rules?", "all"),
-        ("What safety equipment is required?", "compliance"),
-        ("How do I submit expense reports?", "handbook"),
-        ("What is OSHA lockout/tagout?", "compliance"),
-        ("What is the company policy on meal breaks?", "all"),
+        ("How do I create a work order?", "all"),
+        ("How do I add a customer location?", "manual"),
+        ("What are the steps to complete an inspection?", "all"),
+        ("How do I filter work orders by status?", "manual"),
+        ("What permissions are needed for the core module?", "all"),
     ]
     
     for query, collection in test_queries:
@@ -232,4 +272,4 @@ if __name__ == "__main__":
     if "--test" in sys.argv:
         test_search()
     
-    logger.info("\n✓ Vector store ready for Phase 3 RAG pipeline!")
+    logger.info("\n✓ Vector store ready for RAG pipeline with user manual!")

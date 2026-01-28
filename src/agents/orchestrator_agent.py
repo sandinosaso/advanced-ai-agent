@@ -19,6 +19,31 @@ from src.agents.sql_graph_agent import SQLGraphAgent
 from src.agents.rag_agent import RAGAgent
 from src.utils.config import settings, create_llm
 
+# Module-level agent instance (reused across requests)
+_shared_agent: Optional['OrchestratorAgent'] = None
+
+
+def get_orchestrator_agent(checkpointer=None, conversation_db=None, **kwargs) -> 'OrchestratorAgent':
+    """
+    Get shared agent instance (singleton pattern)
+    
+    Args:
+        checkpointer: LangGraph checkpointer instance
+        conversation_db: ConversationDatabase instance for message truncation
+        **kwargs: Additional arguments passed to OrchestratorAgent
+        
+    Returns:
+        Shared OrchestratorAgent instance
+    """
+    global _shared_agent
+    if _shared_agent is None or _shared_agent.checkpointer != checkpointer:
+        _shared_agent = OrchestratorAgent(
+            checkpointer=checkpointer,
+            conversation_db=conversation_db,
+            **kwargs
+        )
+    return _shared_agent
+
 
 class AgentState(TypedDict):
     """State for the orchestrator workflow"""
@@ -47,6 +72,8 @@ class OrchestratorAgent:
     
     def __init__(
         self,
+        checkpointer=None,
+        conversation_db=None,
         model: Optional[str] = None,
         temperature: Optional[float] = None
     ):
@@ -54,9 +81,14 @@ class OrchestratorAgent:
         Initialize orchestrator
         
         Args:
+            checkpointer: LangGraph checkpointer instance for state persistence
+            conversation_db: ConversationDatabase instance for message truncation
             model: LLM model for routing decisions (defaults to provider-specific model)
             temperature: Generation temperature (defaults to settings.orchestrator_temperature)
         """
+        self.checkpointer = checkpointer
+        self.conversation_db = conversation_db  # For message truncation only
+        
         self.llm = create_llm(
             model=model,
             temperature=temperature if temperature is not None else settings.orchestrator_temperature,
@@ -76,7 +108,17 @@ class OrchestratorAgent:
             agents_enabled.append("SQL")
         if settings.enable_rag_agent:
             agents_enabled.append("RAG")
-        logger.info(f"Initialized OrchestratorAgent with LangGraph workflow (Enabled: {', '.join(agents_enabled) if agents_enabled else 'None'})")
+        checkpoint_status = "with checkpointing" if checkpointer else "without checkpointing"
+        logger.info(f"Initialized OrchestratorAgent with LangGraph workflow (Enabled: {', '.join(agents_enabled) if agents_enabled else 'None'}, {checkpoint_status})")
+    
+    def _truncate_messages_if_needed(self, state: AgentState) -> AgentState:
+        """Truncate messages before LLM calls to respect token limits"""
+        messages = state.get("messages", [])
+        if self.conversation_db and len(messages) > settings.max_conversation_messages:
+            strategy = settings.conversation_memory_strategy
+            truncated = self.conversation_db.prepare_messages_for_context(messages, strategy)
+            state["messages"] = truncated
+        return state
     
     def _classify_question(self, state: AgentState) -> AgentState:
         """
@@ -88,6 +130,28 @@ class OrchestratorAgent:
         - GENERAL: General questions that can be answered directly by LLM
         """
         question = state["question"]
+        
+        # Handle messages - ensure current question is present
+        # Messages should already include checkpoint messages + new message (loaded in chat route)
+        # But we verify current question is present as defensive programming
+        messages = state.get("messages", [])
+        
+        # Ensure current question is in messages (defensive check)
+        if not messages:
+            # No messages - first message
+            state["messages"] = [HumanMessage(content=question)]
+        else:
+            # Check if current question is already the last message
+            last_msg = messages[-1]
+            if not (isinstance(last_msg, HumanMessage) and last_msg.content == question):
+                # Current question not present - add it (shouldn't happen, but defensive)
+                messages = list(messages)
+                messages.append(HumanMessage(content=question))
+                state["messages"] = messages
+            # Else: current question already present, use as-is
+        
+        # Truncate messages before LLM call (defensive)
+        state = self._truncate_messages_if_needed(state)
         
         classification_prompt = f"""Classify this question as SQL, RAG, or GENERAL.
 
@@ -247,14 +311,22 @@ Respond with ONLY one word: SQL, RAG, or GENERAL"""
     
     def _execute_general_agent(self, state: AgentState) -> AgentState:
         """Execute general agent for questions that don't require SQL or RAG"""
+        # Truncate messages before LLM call
+        state = self._truncate_messages_if_needed(state)
+        
         question = state["question"]
         
         logger.info(f"Executing general agent for: '{question}'")
         
         try:
             # Use LLM directly to answer general questions
-            # This is a simple direct response without database or document retrieval
-            response = self.llm.invoke([HumanMessage(content=question)])
+            # Include conversation history for context
+            messages_for_llm = list(state.get("messages", []))
+            if not messages_for_llm or not isinstance(messages_for_llm[-1], HumanMessage):
+                # Add current question if not already in messages
+                messages_for_llm.append(HumanMessage(content=question))
+            
+            response = self.llm.invoke(messages_for_llm)
             answer = response.content if hasattr(response, 'content') and response.content else "I couldn't generate an answer. Please try again."
             
             state["general_result"] = answer
@@ -357,7 +429,10 @@ Respond with ONLY one word: SQL, RAG, or GENERAL"""
         # Finalize goes to END
         workflow.add_edge("finalize", END)
         
-        return workflow.compile()
+        if self.checkpointer:
+            return workflow.compile(checkpointer=self.checkpointer)
+        else:
+            return workflow.compile()  # No checkpointing (backward compatible)
     
     def ask(self, question: str, verbose: bool = True) -> Dict[str, Any]:
         """
@@ -428,7 +503,7 @@ Respond with ONLY one word: SQL, RAG, or GENERAL"""
         result = self.ask(question, verbose=False)
         return result["answer"]
     
-    async def astream_events(self, input_data: dict, version: str = "v1"):
+    async def astream_events(self, input_data: dict, config: Optional[dict] = None, version: str = "v1"):
         """
         Stream events from the LangGraph workflow execution
         
@@ -437,6 +512,7 @@ Respond with ONLY one word: SQL, RAG, or GENERAL"""
         
         Args:
             input_data: Initial state for the workflow (must match AgentState structure)
+            config: Configuration dict with thread_id for checkpointing (optional)
             version: Stream events API version (default: "v1")
         
         Yields:
@@ -444,8 +520,10 @@ Respond with ONLY one word: SQL, RAG, or GENERAL"""
             
         Example:
             ```python
+            config = {"configurable": {"thread_id": "conversation-123"}}
             async for event in agent.astream_events(
-                {"question": "How many technicians?", "messages": [], ...},
+                {"question": "How many technicians?", ...},
+                config=config,
                 version="v1"
             ):
                 if event["event"] == "on_chat_model_stream":
@@ -453,6 +531,10 @@ Respond with ONLY one word: SQL, RAG, or GENERAL"""
                     print(chunk.content)
             ```
         """
-        async for event in self.workflow.astream_events(input_data, version=version):
-            yield event
+        if config:
+            async for event in self.workflow.astream_events(input_data, config=config, version=version):
+                yield event
+        else:
+            async for event in self.workflow.astream_events(input_data, version=version):
+                yield event
 

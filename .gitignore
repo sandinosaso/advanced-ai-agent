@@ -49,8 +49,21 @@ data/vector_store/*
 data/embeddings_cache/*
 data/logs/*
 *.log
+
+# Database files (SQLite, ChromaDB, etc.)
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+conversations.db
+conversations.db-*
+chroma.sqlite3
+chroma.sqlite3-*
 
 # Google Credentials
 *credentials*.json
