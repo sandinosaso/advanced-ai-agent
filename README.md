@@ -21,8 +21,10 @@ A Python-based AI agent system for natural language to SQL conversion with RAG c
 ### AI/ML
 - **LangChain** - Agent framework
 - **LangGraph** - Workflow orchestration
-- **OpenAI** - LLM provider (gpt-4o-mini, gpt-4o)
+- **OpenAI** - LLM provider (gpt-4o-mini, gpt-4o) - Optional, can use Ollama instead
+- **Ollama** - Local LLM provider for offline operation (optional)
 - **ChromaDB** - Vector database for RAG
+- **Sentence Transformers** - Local embeddings for offline operation
 
 ### Database
 - **MySQL** - Primary database (100+ tables)
@@ -79,6 +81,7 @@ advanced-ai-agent/
 - Python 3.11+
 - UV package manager
 - MySQL database
+- (Optional) Ollama for offline/local operation
 
 ### Installation
 
@@ -99,8 +102,12 @@ advanced-ai-agent/
 
 3. **Configure environment variables:**
    Copy `.env.example` to `.env` and configure:
+   
+   **For OpenAI (default, requires internet):**
    ```env
+   LLM_PROVIDER=openai
    OPENAI_API_KEY=your-key-here
+   OPENAI_MODEL=gpt-4o-mini
    DB_HOST=127.0.0.1
    DB_PORT=3306
    DB_USER=root
@@ -108,6 +115,65 @@ advanced-ai-agent/
    DB_NAME=crewos
    DB_ENCRYPT_KEY=your_encryption_key
    ```
+   
+   **For Ollama (offline/local operation):**
+   ```env
+   LLM_PROVIDER=ollama
+   OLLAMA_BASE_URL=http://localhost:11434
+   OLLAMA_MODEL=llama3
+   OLLAMA_EMBEDDING_MODEL=all-MiniLM-L6-v2
+   DB_HOST=127.0.0.1
+   DB_PORT=3306
+   DB_USER=root
+   DB_PWD=your_password
+   DB_NAME=crewos
+   DB_ENCRYPT_KEY=your_encryption_key
+   ```
+
+### Using Ollama for Offline Operation
+
+To run the system without internet access using local models:
+
+1. **Install Ollama:**
+   ```bash
+   # macOS/Linux
+   curl -fsSL https://ollama.com/install.sh | sh
+   
+   # Or download from https://ollama.com
+   ```
+
+2. **Pull a model:**
+   ```bash
+   # Recommended models:
+   ollama pull llama3          # Good general-purpose model (8B)
+   ollama pull codellama       # Better for SQL generation
+   ollama pull mistral         # Smaller, faster alternative
+   ```
+
+3. **Start Ollama server:**
+   ```bash
+   # Option 1: Use the provided script (recommended)
+   bash scripts/start-ollama.sh
+   
+   # Option 2: Start manually
+   ollama serve
+   # Server runs on http://localhost:11434 by default
+   ```
+
+4. **Configure `.env`:**
+   ```env
+   LLM_PROVIDER=ollama
+   OLLAMA_BASE_URL=http://localhost:11434
+   OLLAMA_MODEL=llama3
+   OLLAMA_EMBEDDING_MODEL=all-MiniLM-L6-v2
+   ```
+   
+   Note: `OLLAMA_EMBEDDING_MODEL` uses sentence-transformers (local), not Ollama's API.
+
+5. **Model Recommendations:**
+   - **SQL Generation**: `codellama` or `llama3` (8B+) - requires strong reasoning
+   - **RAG/General**: `llama3` (7B+) or `mistral` (7B) - good balance
+   - **Embeddings**: `all-MiniLM-L6-v2` (fast) or `all-mpnet-base-v2` (better quality)
 
 ## Running the Application
 
@@ -132,6 +198,7 @@ The API will be available at:
 - `scripts/run-dev.py` - Start development server with auto-reload
 - `scripts/run-prod.py` - Start production server
 - `scripts/setup.sh` - Setup script for initial configuration
+- `scripts/start-ollama.sh` - Start Ollama server (for offline operation)
 - `scripts/populate_vector_store.py` - Populate vector store with documents
 - `scripts/build_join_graph.py` - Build join graph from database schema
 - `scripts/build_join_graph_paths.py` - Generate join paths for SQL agent

@@ -11,9 +11,8 @@ from pathlib import Path
 from typing import TypedDict, List, Dict, Any, Optional
 
 from langgraph.graph import StateGraph, END
-from langchain_openai import ChatOpenAI
 
-from src.utils.config import settings
+from src.utils.config import settings, create_llm
 from src.utils.logger import logger
 from src.utils.path_finder import JoinPathFinder
 from src.tools.sql_tool import sql_tool
@@ -104,8 +103,7 @@ class SQLGraphAgent:
     """
 
     def __init__(self):
-        self.llm = ChatOpenAI(
-            model=settings.openai_model,
+        self.llm = create_llm(
             temperature=0,
             max_completion_tokens=settings.max_output_tokens,
         )

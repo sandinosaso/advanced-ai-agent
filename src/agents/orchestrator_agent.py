@@ -12,12 +12,11 @@ from typing import Annotated, TypedDict, Dict, Any, Sequence, List, Optional
 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
-from langchain_openai import ChatOpenAI
 from loguru import logger
 
 from src.agents.sql_graph_agent import SQLGraphAgent
 from src.agents.rag_agent import RAGAgent
-from src.utils.config import settings
+from src.utils.config import settings, create_llm
 
 
 class AgentState(TypedDict):
@@ -46,28 +45,36 @@ class OrchestratorAgent:
     
     def __init__(
         self,
-        model: str = "gpt-4o-mini",
+        model: Optional[str] = None,
         temperature: Optional[float] = None
     ):
         """
         Initialize orchestrator
         
         Args:
-            model: LLM model for routing decisions
+            model: LLM model for routing decisions (defaults to provider-specific model)
             temperature: Generation temperature (defaults to settings.orchestrator_temperature)
         """
-        self.llm = ChatOpenAI(
-            model=model, 
+        self.llm = create_llm(
+            model=model,
             temperature=temperature if temperature is not None else settings.orchestrator_temperature,
             max_completion_tokens=settings.max_output_tokens
         )
-        self.sql_agent = SQLGraphAgent()
-        self.rag_agent = RAGAgent()
+        
+        # Lazy initialization - only create agents if enabled
+        self.sql_agent = SQLGraphAgent() if settings.enable_sql_agent else None
+        self.rag_agent = None  # Will be initialized lazily when needed
         
         # Build the workflow graph
         self.workflow = self._build_workflow()
         
-        logger.info("Initialized OrchestratorAgent with LangGraph workflow")
+        # Log agent status
+        agents_enabled = []
+        if settings.enable_sql_agent:
+            agents_enabled.append("SQL")
+        if settings.enable_rag_agent:
+            agents_enabled.append("RAG")
+        logger.info(f"Initialized OrchestratorAgent with LangGraph workflow (Enabled: {', '.join(agents_enabled) if agents_enabled else 'None'})")
     
     def _classify_question(self, state: AgentState) -> AgentState:
         """
@@ -115,8 +122,21 @@ Question: {question}
 
 Respond with ONLY one word: SQL or RAG"""
         
-        response = self.llm.invoke([HumanMessage(content=classification_prompt)])
-        classification = response.content.strip().upper()
+        try:
+            response = self.llm.invoke([HumanMessage(content=classification_prompt)])
+            classification = str(response.content).strip().upper() if hasattr(response, 'content') and response.content else "RAG"
+        except Exception as e:
+            error_msg = str(e)
+            # Check for common Ollama errors
+            if "404" in error_msg or "not found" in error_msg.lower() or "model" in error_msg.lower():
+                from src.utils.config import settings
+                if settings.llm_provider == "ollama":
+                    raise ValueError(
+                        f"Ollama model '{settings.ollama_model}' is not available. "
+                        f"Please run: ollama pull {settings.ollama_model}"
+                    ) from e
+            # Re-raise other errors
+            raise
         
         # Validate classification
         if classification not in ["SQL", "RAG"]:
@@ -133,6 +153,22 @@ Respond with ONLY one word: SQL or RAG"""
     def _execute_sql_agent(self, state: AgentState) -> AgentState:
         """Execute SQL agent for database queries"""
         question = state["question"]
+        
+        # Check if SQL agent is enabled
+        if not settings.enable_sql_agent:
+            logger.info(f"SQL agent is disabled, returning disabled message")
+            state["sql_result"] = "🔧 SQL Agent is not enabled. Please enable it via ENABLE_SQL_AGENT=true in your .env file."
+            state["sql_structured_result"] = None
+            state["messages"].append(AIMessage(content=state["sql_result"]))
+            state["next_step"] = "finalize"
+            return state
+        
+        # Type guard: sql_agent is guaranteed to be not None here
+        if self.sql_agent is None:
+            state["sql_result"] = "Error: SQL agent was not initialized"
+            state["sql_structured_result"] = None
+            state["next_step"] = "finalize"
+            return state
         
         logger.info(f"Executing SQL agent for: '{question}'")
         
@@ -154,6 +190,20 @@ Respond with ONLY one word: SQL or RAG"""
     def _execute_rag_agent(self, state: AgentState) -> AgentState:
         """Execute RAG agent for handbook/compliance questions"""
         question = state["question"]
+        
+        # Check if RAG agent is enabled
+        if not settings.enable_rag_agent:
+            logger.info(f"RAG agent is disabled, returning disabled message")
+            state["rag_result"] = "📚 RAG Agent is not enabled. Please enable it via ENABLE_RAG_AGENT=true in your .env file."
+            state["messages"].append(AIMessage(content=state["rag_result"]))
+            state["next_step"] = "finalize"
+            return state
+        
+        # Lazy initialization of RAG agent (only when needed and enabled)
+        # This prevents HF Hub downloads when RAG is disabled
+        if self.rag_agent is None:
+            logger.info("Lazy initializing RAG agent (this may download models from Hugging Face Hub if using Ollama)")
+            self.rag_agent = RAGAgent()
         
         logger.info(f"Executing RAG agent for: '{question}'")
         

@@ -20,6 +20,8 @@ from datetime import datetime
 from openai import OpenAI
 from loguru import logger
 
+from src.utils.config import settings
+
 
 @dataclass
 class EmbeddingCacheEntry:
@@ -52,7 +54,7 @@ class EmbeddingService:
     
     def __init__(
         self,
-        model: str = "text-embedding-3-small",
+        model: Optional[str] = None,
         cache_dir: Optional[Path] = None,
         enable_cache: bool = True
     ):
@@ -60,13 +62,42 @@ class EmbeddingService:
         Initialize embedding service
         
         Args:
-            model: OpenAI embedding model name
+            model: Embedding model name (defaults to provider-specific model)
             cache_dir: Directory for caching embeddings
             enable_cache: Whether to use caching
         """
-        self.client = OpenAI()  # Uses OPENAI_API_KEY env var
+        self.provider = settings.llm_provider.lower()
+        
+        # Determine model based on provider
+        if model is None:
+            if self.provider == "ollama":
+                model = settings.ollama_embedding_model
+            else:
+                model = "text-embedding-3-small"
+        
         self.model = model
         self.enable_cache = enable_cache
+        
+        # Initialize embedding client based on provider
+        if self.provider == "ollama":
+            # Use sentence-transformers for local embeddings
+            try:
+                from sentence_transformers import SentenceTransformer
+                logger.info(f"Loading sentence-transformers model: {model}")
+                self.embedding_model = SentenceTransformer(model)
+                self.client = None  # Not using OpenAI client
+                logger.info(f"✅ Loaded sentence-transformers model: {model}")
+            except ImportError:
+                raise ImportError(
+                    "sentence-transformers is required when LLM_PROVIDER=ollama. "
+                    "Install it with: pip install sentence-transformers"
+                )
+        else:
+            # Use OpenAI embeddings
+            if not settings.openai_api_key:
+                raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
+            self.client = OpenAI()  # Uses OPENAI_API_KEY env var
+            self.embedding_model = None
         
         # Set up cache directory
         if cache_dir is None:
@@ -76,8 +107,9 @@ class EmbeddingService:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
-        # Cache file for this model
-        self.cache_file = self.cache_dir / f"{model}.json"
+        # Cache file includes provider and model name
+        cache_key = f"{self.provider}_{model}".replace("/", "_")
+        self.cache_file = self.cache_dir / f"{cache_key}.json"
         
         # Load cache
         self.cache: Dict[str, EmbeddingCacheEntry] = {}
@@ -91,7 +123,7 @@ class EmbeddingService:
             "estimated_cost": 0.0
         }
         
-        logger.info(f"Initialized EmbeddingService (model={model}, cache={enable_cache})")
+        logger.info(f"Initialized EmbeddingService (provider={self.provider}, model={model}, cache={enable_cache})")
         logger.info(f"Cache loaded: {len(self.cache)} entries from {self.cache_file}")
     
     def _load_cache(self) -> None:
@@ -222,26 +254,37 @@ class EmbeddingService:
                    f"{len(embeddings)} from cache, "
                    f"{len(texts_to_fetch)} from API")
         
-        # Fetch missing embeddings from API in batches
+        # Fetch missing embeddings
         if texts_to_fetch:
-            for batch_start in range(0, len(texts_to_fetch), batch_size):
-                batch_end = min(batch_start + batch_size, len(texts_to_fetch))
-                batch_texts = texts_to_fetch[batch_start:batch_end]
-                batch_indices = text_indices[batch_start:batch_end]
-                
-                # Call API with retry logic
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        logger.debug(f"Calling OpenAI API for batch {batch_start}-{batch_end}")
-                        response = self.client.embeddings.create(
-                            model=self.model,
-                            input=batch_texts
+            if self.provider == "ollama":
+                # Use sentence-transformers for local embeddings
+                logger.debug(f"Generating embeddings with sentence-transformers for {len(texts_to_fetch)} texts")
+                try:
+                    if self.embedding_model is None:
+                        raise RuntimeError("Embedding model not initialized")
+                    # Generate embeddings in batches
+                    for batch_start in range(0, len(texts_to_fetch), batch_size):
+                        batch_end = min(batch_start + batch_size, len(texts_to_fetch))
+                        batch_texts = texts_to_fetch[batch_start:batch_end]
+                        batch_indices = text_indices[batch_start:batch_end]
+                        
+                        # Generate embeddings using sentence-transformers
+                        batch_embeddings = self.embedding_model.encode(
+                            batch_texts,
+                            convert_to_numpy=False,
+                            show_progress_bar=False
                         )
                         
                         # Extract embeddings and cache them
                         for j, (text, orig_idx) in enumerate(zip(batch_texts, batch_indices)):
-                            embedding = response.data[j].embedding
+                            emb = batch_embeddings[j]
+                            # Convert to list of floats
+                            if hasattr(emb, 'tolist'):
+                                embedding = emb.tolist()
+                            elif isinstance(emb, list):
+                                embedding = [float(x) for x in emb]
+                            else:
+                                embedding = [float(x) for x in list(emb)]
                             embeddings.append((orig_idx, embedding))
                             
                             # Cache it
@@ -255,21 +298,57 @@ class EmbeddingService:
                                     created_at=datetime.now().isoformat(),
                                     dimensions=len(embedding)
                                 )
-                        
-                        break  # Success, exit retry loop
-                        
-                    except Exception as e:
-                        if "rate_limit" in str(e).lower() and attempt < max_retries - 1:
-                            wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
-                            logger.warning(f"Rate limit hit, retrying in {wait_time}s...")
-                            time.sleep(wait_time)
-                        else:
-                            logger.error(f"Failed to generate embeddings: {e}")
-                            raise
-                
-                # Small delay between batches to avoid rate limits
-                if batch_end < len(texts_to_fetch):
-                    time.sleep(0.1)
+                except Exception as e:
+                    logger.error(f"Failed to generate embeddings with sentence-transformers: {e}")
+                    raise
+            else:
+                # Use OpenAI API
+                for batch_start in range(0, len(texts_to_fetch), batch_size):
+                    batch_end = min(batch_start + batch_size, len(texts_to_fetch))
+                    batch_texts = texts_to_fetch[batch_start:batch_end]
+                    batch_indices = text_indices[batch_start:batch_end]
+                    
+                    # Call API with retry logic
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            logger.debug(f"Calling OpenAI API for batch {batch_start}-{batch_end}")
+                            response = self.client.embeddings.create(
+                                model=self.model,
+                                input=batch_texts
+                            )
+                            
+                            # Extract embeddings and cache them
+                            for j, (text, orig_idx) in enumerate(zip(batch_texts, batch_indices)):
+                                embedding = response.data[j].embedding
+                                embeddings.append((orig_idx, embedding))
+                                
+                                # Cache it
+                                if self.enable_cache:
+                                    text_hash = self._hash_text(text)
+                                    self.cache[text_hash] = EmbeddingCacheEntry(
+                                        text_hash=text_hash,
+                                        text_preview=text[:100],
+                                        embedding=embedding,
+                                        model=self.model,
+                                        created_at=datetime.now().isoformat(),
+                                        dimensions=len(embedding)
+                                    )
+                            
+                            break  # Success, exit retry loop
+                            
+                        except Exception as e:
+                            if "rate_limit" in str(e).lower() and attempt < max_retries - 1:
+                                wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                                logger.warning(f"Rate limit hit, retrying in {wait_time}s...")
+                                time.sleep(wait_time)
+                            else:
+                                logger.error(f"Failed to generate embeddings: {e}")
+                                raise
+                    
+                    # Small delay between batches to avoid rate limits
+                    if batch_end < len(texts_to_fetch):
+                        time.sleep(0.1)
         
         # Sort embeddings back to original order
         embeddings.sort(key=lambda x: x[0])

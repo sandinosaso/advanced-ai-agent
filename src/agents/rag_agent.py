@@ -7,11 +7,12 @@ Retrieves relevant chunks from vector store and generates natural language answe
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
-from openai import OpenAI
+from langchain_core.messages import HumanMessage
 from loguru import logger
 
 from src.utils.rag.vector_store import VectorStore, SearchResult
 from src.utils.rag.embedding_service import EmbeddingService
+from src.utils.config import create_llm, settings
 
 
 @dataclass
@@ -38,8 +39,8 @@ class RAGAgent:
     def __init__(
         self,
         vector_store: Optional[VectorStore] = None,
-        model: str = "gpt-4o-mini",
-        temperature: float = 0.1,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
         max_context_chunks: int = 5
     ):
         """
@@ -47,17 +48,18 @@ class RAGAgent:
         
         Args:
             vector_store: Vector store for retrieval
-            model: OpenAI model for generation
-            temperature: Generation temperature (0-1)
+            model: LLM model for generation (defaults to provider-specific model)
+            temperature: Generation temperature (defaults to settings.openai_temperature)
             max_context_chunks: Max chunks to include in context
         """
         self.vector_store = vector_store or VectorStore()
-        self.client = OpenAI()
-        self.model = model
-        self.temperature = temperature
+        self.llm = create_llm(
+            model=model,
+            temperature=temperature if temperature is not None else settings.openai_temperature
+        )
         self.max_context_chunks = max_context_chunks
         
-        logger.info(f"Initialized RAGAgent (model={model}, max_chunks={max_context_chunks})")
+        logger.info(f"Initialized RAGAgent (max_chunks={max_context_chunks})")
     
     def _build_prompt(self, question: str, chunks: List[SearchResult]) -> str:
         """
@@ -147,17 +149,13 @@ ANSWER:"""
         # Build prompt with context
         prompt = self._build_prompt(question, chunks)
         
-        # Generate answer
+        # Generate answer using LangChain chat model
         logger.debug(f"Calling LLM with {len(chunks)} chunks as context")
-        response = self.client.chat.completions.create(
-            model=self.model,
-            temperature=self.temperature,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
-        
-        answer = response.choices[0].message.content
+        messages = [HumanMessage(content=prompt)]
+        response = self.llm.invoke(messages)
+        answer = response.content
+        if not answer:
+            answer = "I couldn't generate an answer. Please try again."
         
         # Extract sources
         sources = []
@@ -179,8 +177,7 @@ ANSWER:"""
             metadata={
                 "collection": collection,
                 "chunks_retrieved": len(chunks),
-                "model": self.model,
-                "temperature": self.temperature
+                "provider": settings.llm_provider
             }
         )
     

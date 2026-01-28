@@ -8,10 +8,9 @@ from typing import List, Optional, Set, Tuple
 from sqlalchemy import create_engine, inspect
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
-from langchain_openai import ChatOpenAI
 
 from ..models.database import get_database
-from ..utils.config import settings
+from ..utils.config import settings, create_llm
 from ..utils.logger import logger
 from ..utils.sql.secure_views import SECURE_VIEW_MAP, rewrite_secure_tables, validate_tables_exist
 
@@ -49,8 +48,7 @@ class SQLQueryTool:
         logger.info(f"Available tables/views: {len(self._available_tables)}")
         
         # Initialize LLM for SQL agent
-        self.llm = ChatOpenAI(
-            model=settings.openai_model,
+        self.llm = create_llm(
             temperature=0,  # Deterministic for SQL generation
             max_completion_tokens=settings.max_output_tokens  # Limit output tokens
         )
