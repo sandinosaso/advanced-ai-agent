@@ -18,6 +18,7 @@ from src.api.routes import chat
 from src.api.models import HealthResponse
 from src.models.conversation_db import get_conversation_db
 from src.utils.config import settings
+from src.utils.rag.vector_store import VectorStore
 
 
 @asynccontextmanager
@@ -33,6 +34,35 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 FastAPI application starting...")
     logger.info("📚 API docs available at http://localhost:8000/docs")
     logger.info("🔄 Streaming endpoint at http://localhost:8000/api/chat/stream")
+    
+    # Check vector store status (for RAG agent)
+    if settings.enable_rag_agent:
+        try:
+            logger.info("📊 Checking RAG vector store status...")
+            vector_store = VectorStore()
+            stats = vector_store.get_stats()
+            
+            total_docs = sum(
+                coll_info.get("count", 0) 
+                for coll_info in stats.get("collections", {}).values()
+            )
+            
+            if total_docs == 0:
+                logger.warning("⚠️  Vector store is EMPTY!")
+                logger.warning("   RAG queries will not work until vector store is populated.")
+                logger.warning("   Run: python scripts/populate_vector_store.py")
+                logger.warning("   Or: ./scripts/reset_and_populate_rag.sh")
+            else:
+                logger.info(f"✅ Vector store ready: {total_docs} total documents across {len(stats.get('collections', {}))} collections")
+                
+                # Log collection details
+                for coll_type, coll_info in stats.get("collections", {}).items():
+                    count = coll_info.get("count", 0)
+                    if count > 0:
+                        logger.debug(f"   - {coll_type}: {count} documents")
+        except Exception as e:
+            logger.error(f"⚠️  Failed to check vector store: {e}")
+            logger.warning("   RAG agent may not function correctly")
     
     # Initialize conversation database and run initial cleanup
     conversation_db = get_conversation_db()

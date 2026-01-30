@@ -140,6 +140,8 @@ Rules:
 - Select from ACTUAL available tables (join graph reflects reality)
 - If unsure, return fewer tables
 - DO NOT invent table names that don't exist
+- Prefer always to show labels/name or any column with text instead of IDS use IDS just for joining tables/ grouping but not to show in the result unless explicitly asked for
+  (make sure to include the table that has those names)
 
 Available tables (subset shown if large):
 {', '.join(all_tables[:settings.sql_max_tables_in_selection_prompt])}
@@ -430,6 +432,14 @@ CRITICAL RULES:
 - Use LIMIT {settings.max_query_rows} unless it's an aggregate COUNT/SUM/etc
 - Use logical table names (workOrder not secure_workorder)
 - DO NOT add secure_ prefix - the system handles that automatically
+
+IMPORTANT FOR NAME/LABEL REQUESTS:
+- If the question asks for "names" or "labels" instead of IDs, select the appropriate name/label columns:
+  * serviceLocation: use "name" column for location name
+  * employee: use "firstName" and "lastName" for employee name (can use CONCAT(firstName, ' ', lastName) AS employeeName)
+  * customer: use "name" column for customer name
+  * crew: use "name" column for crew name
+- When replacing an ID with a name, make sure to SELECT the name column(s) and JOIN to the table that has the name
 
 Question: {state['question']}
 

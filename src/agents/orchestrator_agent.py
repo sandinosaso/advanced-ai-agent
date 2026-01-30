@@ -153,20 +153,105 @@ class OrchestratorAgent:
         # Truncate messages before LLM call (defensive)
         state = self._truncate_messages_if_needed(state)
         
+        # Build context from recent messages to understand follow-ups
+        recent_context = ""
+        messages = state.get("messages", [])
+        if len(messages) > 1:
+            # Get last few message pairs to understand context
+            recent_messages = messages[-4:] if len(messages) > 4 else messages[:-1]
+            context_parts = []
+            for msg in recent_messages:
+                if isinstance(msg, HumanMessage):
+                    context_parts.append(f"User: {msg.content}")
+                elif isinstance(msg, AIMessage):
+                    # Only include routing messages or short responses to avoid token bloat
+                    content = msg.content
+                    if "Routing to" in content or "agent" in content.lower():
+                        context_parts.append(f"Assistant: {content}")
+                    elif len(content) < 100:
+                        context_parts.append(f"Assistant: {content}")
+            
+            if context_parts:
+                recent_context = "\n\nRecent conversation context:\n" + "\n".join(context_parts[-4:]) + "\n"
+        
+        # Build business domain vocabulary from join graph (cached for performance)
+        if not hasattr(self, '_business_entities_cache'):
+            try:
+                # Dynamically load from SQL agent's join graph if available
+                if self.sql_agent and hasattr(self.sql_agent, 'join_graph'):
+                    all_tables = list(self.sql_agent.join_graph.get("tables", {}).keys())
+                    # Filter out system tables and take most common business entities
+                    business_tables = [t for t in all_tables if t not in ['SequelizeMeta', 'deletedEntity', 'syncLog', 'pdfCounter', 'pdfIdentifier', 'authenticationToken']]
+                    # Take top 30 most common/recognizable entities to avoid token bloat
+                    priority_entities = [
+                        "asset", "assetType", "crew", "customer", "employee", "equipment", 
+                        "expense", "expenseType", "inspection", "inspectionTemplate", "jobType", 
+                        "quote", "service", "serviceLocation", "serviceTemplate",
+                        "workOrder", "workOrderStatus", "workTime", "payroll", "safety", 
+                        "attachment", "attachmentType", "note", "nonJobTime"
+                    ]
+                    # Keep priority entities that exist + add other business entities
+                    existing_priority = [e for e in priority_entities if e in business_tables]
+                    other_entities = [t for t in business_tables if t not in priority_entities][:10]
+                    self._business_entities_cache = existing_priority + other_entities
+                else:
+                    # Fallback to curated list if SQL agent not available
+                    self._business_entities_cache = [
+                        "asset", "assetType", "crew", "customer", "employee", "equipment", 
+                        "expense", "inspection", "job", "quote", "service", "serviceLocation",
+                        "workOrder", "workTime", "payroll", "safety", "attachment"
+                    ]
+            except Exception as e:
+                logger.warning(f"Failed to load business entities from join graph: {e}")
+                # Fallback list
+                self._business_entities_cache = [
+                    "asset", "assetType", "crew", "customer", "employee", "equipment", 
+                    "expense", "inspection", "job", "quote", "service", "serviceLocation",
+                    "workOrder", "workTime", "payroll", "safety", "attachment"
+                ]
+        
+        business_entities = self._business_entities_cache
+        
         classification_prompt = f"""Classify this question as SQL, RAG, or GENERAL.
+
+═══════════════════════════════════════════════════════════════════
+⚠️  CRITICAL BUSINESS DOMAIN CONTEXT ⚠️
+═══════════════════════════════════════════════════════════════════
+This system manages: {', '.join(business_entities)}
+
+KEY CLASSIFICATION RULE:
+If the question mentions ANY business entity (or related terms like "types", "statuses", "available"), 
+classify as SQL unless it's explicitly asking "HOW TO USE" the system.
+
+Examples of business-related questions → SQL:
+✓ "What are the [entity] types available?" → SQL (queries database)
+✓ "List the [entities] in the system" → SQL (queries database)
+✓ "Show me all [entity] statuses" → SQL (queries database)
+✗ "How do I create a [entity]?" → RAG (usage question)
+═══════════════════════════════════════════════════════════════════
 
 **SQL** - ONLY if question requires:
 - Querying specific database records
 - Counting, aggregating, or calculating from stored data
 - Filtering existing records by criteria
 - MUST reference data that exists in the database
+- Follow-up questions that modify/refine a previous SQL query
 
 SQL Examples:
-- "How many technicians are in the database?"
-- "What is the total amount of approved expenses?"
-- "Which jobs are currently in progress?"
-- "Show me work logs from last week"
-- "List all technicians with HVAC skills"
+- "How many active employees there are?"
+- "How many equipment/locations there are?"
+- "Which work orders are currently in progress?"
+- "Show me the work order details for the work orders that are currently in progress"
+- "Give me the name of the lead and employee names for the work orders that are currently in progress"
+- "What are the asset types available?" ← IMPORTANT: Asking about business entity types = SQL
+- "List the asset types available in the system" ← IMPORTANT: "available in system" = data query
+- "What inspection templates exist?" ← Queries existing business data
+- "Show me all expense types" ← Lists business configuration data
+- "What service locations do we have?" ← Queries business locations
+- "List all crew names" ← Queries business entities
+- "Do the same but show the location Name instead of the location Id" (if previous query was SQL)
+- "Show me the same data but with employee names" (if previous query was SQL)
+- "Add the service location to the previous result" (if previous query was SQL)
 
 **RAG** - ONLY if question asks about:
 - System usage, how-to questions, feature explanations
@@ -202,13 +287,16 @@ GENERAL Examples:
 - "Tell me a joke"
 
 IMPORTANT RULES:
-1. If asking for CURRENT DATA or STATISTICS from the database → SQL
-2. If asking about HOW TO USE THE SYSTEM or SYSTEM FEATURES from user manual → RAG
-3. If asking about GENERAL KNOWLEDGE or non-business topics → GENERAL
-4. If unsure between SQL and RAG, prefer SQL for data queries, RAG for system usage queries
-5. If question doesn't clearly fit SQL or RAG → GENERAL
-
-Question: {question}
+1. **CRITICAL**: If the question mentions ANY business entities (asset, crew, employee, workOrder, inspection, quote, service, expense, etc.) → SQL
+2. **CRITICAL**: Questions like "What [entity] types are available/exist?" or "List [entities]" → SQL (not GENERAL)
+3. If asking for CURRENT DATA or STATISTICS from the database → SQL
+4. If asking about HOW TO USE THE SYSTEM or SYSTEM FEATURES from user manual → RAG
+5. If asking about GENERAL KNOWLEDGE or non-business topics → GENERAL
+6. If unsure between SQL and RAG, prefer SQL for data queries, RAG for system usage queries
+7. If question doesn't clearly fit SQL or RAG → GENERAL
+8. **CRITICAL**: If the conversation context shows a previous SQL query was just executed, and the current question references "the previous result", "the same", "that data", "from above", etc., classify as SQL
+9. Follow-up questions that modify a previous query result (e.g., "show X instead of Y", "add column Z") should be classified the same as the original query{recent_context}
+Current question: {question}
 
 Respond with ONLY one word: SQL, RAG, or GENERAL"""
         
