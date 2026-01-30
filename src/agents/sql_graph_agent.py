@@ -15,6 +15,7 @@ from langgraph.graph import StateGraph, END
 from src.utils.config import settings, create_llm
 from src.utils.logger import logger
 from src.utils.path_finder import JoinPathFinder
+from src.utils.domain_ontology import DomainOntology, format_domain_context, build_where_clauses
 from src.tools.sql_tool import sql_tool
 from src.utils.sql.secure_views import (
     rewrite_secure_tables,
@@ -26,9 +27,15 @@ from src.utils.sql.secure_views import (
 _project_root = Path(__file__).parent.parent.parent
 JOIN_GRAPH_PATH = _project_root / "artifacts" / "join_graph_merged.json"
 
+# Audit columns to exclude from join planning
+# These columns are for tracking metadata, not for establishing semantic relationships
+AUDIT_COLUMNS = {'createdBy', 'updatedBy', 'createdAt', 'updatedAt'}
+
 
 class SQLGraphState(TypedDict):
     question: str
+    domain_terms: List[str]  # Extracted business terms (e.g., ["crane", "action_item"])
+    domain_resolutions: List[Dict[str, Any]]  # Schema mappings for domain terms
     tables: List[str]
     allowed_relationships: List[Dict[str, Any]]
     join_plan: str
@@ -45,8 +52,28 @@ class SQLGraphState(TypedDict):
 
 
 def load_join_graph() -> Dict[str, Any]:
+    """
+    Load the join graph and filter out audit column relationships.
+    
+    Audit columns (createdBy, updatedBy, createdAt, updatedAt) are metadata fields
+    for tracking changes, not semantic business relationships. They should not be
+    used for determining join paths.
+    """
     with open(str(JOIN_GRAPH_PATH), "r", encoding="utf-8") as f:
-        return json.load(f)
+        graph = json.load(f)
+    
+    # Filter out audit column relationships
+    original_count = len(graph["relationships"])
+    graph["relationships"] = [
+        r for r in graph["relationships"]
+        if r["from_column"] not in AUDIT_COLUMNS
+    ]
+    filtered_count = original_count - len(graph["relationships"])
+    
+    logger.info(f"Loaded join graph: {len(graph['tables'])} tables, {len(graph['relationships'])} relationships "
+                f"(filtered {filtered_count} audit column relationships)")
+    
+    return graph
 
 
 def trace_step(step_name):
@@ -107,18 +134,106 @@ class SQLGraphAgent:
             temperature=0,
             max_completion_tokens=settings.max_output_tokens,
         )
+        # Load join graph (audit columns are filtered during load)
         self.join_graph = load_join_graph()
         
         # Initialize path finder for efficient transitive join path discovery
+        # Note: join_graph relationships are already filtered (no audit columns)
         self.path_finder = JoinPathFinder(
             self.join_graph["relationships"],
             confidence_threshold=settings.sql_confidence_threshold
         )
         
+        # Initialize domain ontology for business concept resolution
+        if settings.domain_registry_enabled:
+            try:
+                self.domain_ontology = DomainOntology()
+                logger.info("Domain ontology initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize domain ontology: {e}. Proceeding without domain resolution.")
+                self.domain_ontology = None
+        else:
+            self.domain_ontology = None
+            logger.info("Domain ontology disabled")
+        
         self.workflow = self._build()
 
         logger.info("SQLGraphAgent initialized with path finder")
 
+    # 0) Domain Term Extraction
+    @trace_step('extract_domain_terms')
+    def _extract_domain_terms(self, state: SQLGraphState) -> SQLGraphState:
+        """
+        Extract domain-specific business terms from the question.
+        
+        Example:
+            "Find work orders with crane inspections that have action items"
+            → domain_terms: ["crane", "action_item"]
+        """
+        if not self.domain_ontology or not settings.domain_extraction_enabled:
+            state['domain_terms'] = []
+            state['domain_resolutions'] = []
+            return state
+        
+        question = state['question']
+        
+        try:
+            domain_terms = self.domain_ontology.extract_domain_terms(question)
+            state['domain_terms'] = domain_terms
+            state['domain_resolutions'] = []  # Will be filled in next step
+            
+            logger.info(f"Extracted {len(domain_terms)} domain terms: {domain_terms}")
+        except Exception as e:
+            logger.error(f"Failed to extract domain terms: {e}")
+            state['domain_terms'] = []
+            state['domain_resolutions'] = []
+        
+        return state
+    
+    # 0b) Domain Term Resolution
+    @trace_step('resolve_domain_terms')
+    def _resolve_domain_terms(self, state: SQLGraphState) -> SQLGraphState:
+        """
+        Resolve domain terms to schema locations.
+        
+        Maps business concepts to:
+        - Primary tables (assetType for "crane")
+        - Filter conditions (isActionItem=true for "action item")
+        - Bridge tables needed (dynamicAttribute, dynamicAttributeValue)
+        """
+        if not self.domain_ontology:
+            return state
+        
+        domain_terms = state.get('domain_terms', [])
+        resolutions = []
+        
+        for term in domain_terms:
+            try:
+                resolution = self.domain_ontology.resolve_domain_term(term)
+                if resolution:
+                    resolutions.append({
+                        'term': resolution.term,
+                        'entity': resolution.entity,
+                        'tables': resolution.tables,
+                        'filters': resolution.filters,
+                        'confidence': resolution.confidence,
+                        'strategy': resolution.resolution_strategy
+                    })
+            except Exception as e:
+                logger.error(f"Failed to resolve domain term '{term}': {e}")
+        
+        state['domain_resolutions'] = resolutions
+        
+        # Log domain understanding
+        if resolutions:
+            logger.info(f"Resolved {len(resolutions)} domain terms to schema:")
+            for res in resolutions:
+                logger.info(f"  - '{res['term']}' → tables: {res['tables']}, filters: {len(res['filters'])}")
+        else:
+            logger.debug("No domain terms resolved")
+        
+        return state
+    
     # 1) Table Selector
     @trace_step('select_tables')
     def _select_tables(self, state: SQLGraphState) -> SQLGraphState:
@@ -129,8 +244,25 @@ class SQLGraphAgent:
         - Join graph contains real tables (both base tables and secure views)
         - We select based on what exists, not what we want to rewrite
         - Rewriting happens later in SQL generation
+        - Domain resolutions automatically add required tables
         """
         all_tables = list(self.join_graph["tables"].keys())
+        
+        # Build domain context if available
+        domain_context = ""
+        domain_required_tables = set()
+        
+        domain_resolutions = state.get('domain_resolutions', [])
+        if domain_resolutions:
+            domain_context = "\n" + format_domain_context(domain_resolutions) + "\n"
+            
+            # Collect tables required by domain resolutions
+            for res in domain_resolutions:
+                domain_required_tables.update(res.get('tables', []))
+            
+            if domain_required_tables:
+                domain_context += f"\nIMPORTANT: Domain concepts require these tables: {', '.join(sorted(domain_required_tables))}\n"
+                domain_context += "You MUST include these tables in your selection.\n"
 
         prompt = f"""
 Select the set of tables needed to answer the question.
@@ -142,7 +274,7 @@ Rules:
 - DO NOT invent table names that don't exist
 - Prefer always to show labels/name or any column with text instead of IDS use IDS just for joining tables/ grouping but not to show in the result unless explicitly asked for
   (make sure to include the table that has those names)
-
+{domain_context}
 Available tables (subset shown if large):
 {', '.join(all_tables[:settings.sql_max_tables_in_selection_prompt])}
 
@@ -157,6 +289,12 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
         try:
             tables = json.loads(raw)
             tables = [t for t in tables if t in self.join_graph["tables"]]
+            
+            # Ensure domain-required tables are included
+            for table in domain_required_tables:
+                if table in self.join_graph["tables"] and table not in tables:
+                    tables.append(table)
+                    logger.info(f"Added domain-required table: {table}")
         except Exception as e:
             logger.warning(f"Failed to parse table selection: {e}. Raw output: {raw}")
             # Fallback: use safe defaults based on question
@@ -187,15 +325,17 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
         1. Finds direct relationships between selected tables
         2. Uses path finder to discover transitive paths (multi-hop joins)
         3. Expands allowed relationships to include both direct and transitive paths
+        
+        Note: Audit columns (createdBy, updatedBy, etc.) are filtered when loading the join graph.
         """
+        # Relationships are already filtered (audit columns removed during load)
         rels = self.join_graph["relationships"]
         selected = set(state["tables"])
+        confidence_threshold = settings.sql_confidence_threshold
 
         # Keep direct relationships:
         # - edges where both endpoints are in selected tables
         # - confidence threshold (configurable via settings.sql_confidence_threshold)
-        confidence_threshold = settings.sql_confidence_threshold
-
         direct_relationships = [
             r for r in rels
             if r["from_table"] in selected
@@ -209,6 +349,7 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
 
         # Expand with transitive paths using path finder
         # This finds shortest paths between tables that aren't directly connected
+        # Path finder was initialized with filtered relationships (no audit columns)
         expanded_relationships = self.path_finder.expand_relationships(
             tables=list(selected),
             direct_relationships=direct_relationships,
@@ -220,13 +361,13 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
             f"(added {len(expanded_relationships) - len(direct_relationships)} transitive paths)"
         )
         
-        # Automatically add bridge tables that connect two selected tables with high confidence
+        # Automatically add bridge tables that connect selected tables
         # This ensures we include tables like employeeCrew when both crew and employee are selected
         bridge_tables = self._find_bridge_tables(selected, rels, confidence_threshold=0.9)
         if bridge_tables:
             logger.info(f"Auto-adding {len(bridge_tables)} bridge tables: {bridge_tables}")
             selected.update(bridge_tables)
-            state["tables"] = list(selected)  # Update state with bridge tables
+            state["tables"] = list(selected)
 
         # Log some example paths for debugging
         if len(expanded_relationships) > len(direct_relationships):
@@ -329,6 +470,14 @@ To connect crew to employee, use this EXACT path from the suggestions above:
 {"=" * 70}
 """
         
+        # Build domain filter hints
+        domain_filter_hints = ""
+        domain_resolutions = state.get('domain_resolutions', [])
+        if domain_resolutions:
+            domain_filter_hints = "\n" + format_domain_context(domain_resolutions) + "\n"
+            domain_filter_hints += "IMPORTANT: Plan joins to include tables needed for domain filters.\n"
+            domain_filter_hints += "The WHERE clause will filter based on these domain concepts.\n"
+        
         prompt = f"""
 You are planning SQL joins. You MUST ONLY use the allowed relationships.
 
@@ -347,7 +496,7 @@ These paths are computed by the graph algorithm and include ALL bridge tables ne
 
 Direct and transitive relationships available (for reference only - prefer suggested paths):
 {json.dumps(rels_display[:settings.sql_max_relationships_in_prompt], indent=2)}  # Limited to avoid confusion
-
+{domain_filter_hints}
 Task:
 - PRIMARY: Use the suggested paths above - they are computed by the graph algorithm and are correct
 - If a suggested path exists for the tables you need to connect, USE IT EXACTLY as shown
@@ -450,7 +599,7 @@ Join plan (follow this EXACTLY, step by step):
 
 IMPORTANT: If JOIN_PATH shows multiple steps (e.g., crew.createdBy = user.id, then user.employeeId = employee.id), 
 you MUST include BOTH joins in your SQL. Do NOT skip the bridge table (user) and try to join crew directly to employee.
-
+{self._build_domain_filter_instructions(state)}
 Return ONLY the SQL query, nothing else.
 """
         logger.info(f"[PROMPT] generate_sql prompt:\n{prompt}")
@@ -460,10 +609,123 @@ Return ONLY the SQL query, nothing else.
             lines = raw_sql.split("\n")
             raw_sql = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
         logger.info(f"Generated SQL (before rewriting): {raw_sql}")
+        
+        # Inject domain filter WHERE clauses if needed
+        domain_resolutions = state.get('domain_resolutions', [])
+        if domain_resolutions:
+            raw_sql = self._inject_domain_filters(raw_sql, domain_resolutions)
+            logger.info(f"Injected domain filters into SQL")
+        
+        # Remove duplicate JOINs (safety net for LLM errors)
+        raw_sql = self._deduplicate_joins(raw_sql)
+        
         rewritten_sql = rewrite_secure_tables(raw_sql)
         logger.info(f"Rewritten SQL (after secure view conversion): {rewritten_sql}")
         state["sql"] = rewritten_sql
         return state
+    
+    def _build_domain_filter_instructions(self, state: SQLGraphState) -> str:
+        """Build instructions for domain filters in SQL generation prompt"""
+        domain_resolutions = state.get('domain_resolutions', [])
+        if not domain_resolutions:
+            return ""
+        
+        where_clauses = build_where_clauses(domain_resolutions)
+        if not where_clauses:
+            return ""
+        
+        instructions = f"\n\nDOMAIN FILTER REQUIREMENTS:\n"
+        instructions += "You MUST include these WHERE clause conditions to filter by domain concepts:\n"
+        for clause in where_clauses:
+            instructions += f"  - {clause}\n"
+        instructions += "\nCombine these with AND in your WHERE clause.\n"
+        
+        return instructions
+    
+    def _deduplicate_joins(self, sql: str) -> str:
+        """
+        Remove duplicate JOIN clauses from SQL.
+        
+        Safety net for LLM errors that create duplicate joins.
+        """
+        lines = sql.split('\n')
+        seen_joins = set()
+        deduplicated_lines = []
+        
+        for line in lines:
+            # Normalize JOIN line for comparison (remove extra spaces)
+            normalized = ' '.join(line.strip().split())
+            
+            # Check if this is a JOIN line
+            if normalized.upper().startswith('JOIN '):
+                if normalized not in seen_joins:
+                    seen_joins.add(normalized)
+                    deduplicated_lines.append(line)
+                else:
+                    logger.info(f"Removed duplicate JOIN: {normalized}")
+            else:
+                deduplicated_lines.append(line)
+        
+        return '\n'.join(deduplicated_lines)
+    
+    def _inject_domain_filters(self, sql: str, domain_resolutions: List[Dict[str, Any]]) -> str:
+        """
+        Inject domain filter WHERE clauses into generated SQL.
+        
+        This is a safety net in case the LLM doesn't include the filters.
+        Parses the SQL and adds WHERE clauses for domain concepts.
+        """
+        where_clauses = build_where_clauses(domain_resolutions)
+        if not where_clauses:
+            return sql
+        
+        # Check if SQL already has a WHERE clause
+        sql_upper = sql.upper()
+        
+        # Simple heuristic: if WHERE exists, append with AND
+        # If no WHERE, add WHERE clause before GROUP BY/HAVING/ORDER BY/LIMIT
+        if 'WHERE' in sql_upper:
+            # Find WHERE position and check if filters are already present
+            where_pos = sql_upper.find('WHERE')
+            where_content = sql[where_pos:].lower()
+            
+            # Check if any filter is already present
+            filters_needed = []
+            for clause in where_clauses:
+                # Simplified check - look for the column name in WHERE clause
+                clause_parts = clause.lower().split()
+                if len(clause_parts) >= 1:
+                    column_part = clause_parts[0]  # e.g., "assettype.name"
+                    if column_part not in where_content:
+                        filters_needed.append(clause)
+            
+            if filters_needed:
+                # Find position to insert (before GROUP BY, ORDER BY, LIMIT, or end)
+                insert_keywords = ['GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT']
+                insert_pos = len(sql)
+                for keyword in insert_keywords:
+                    pos = sql_upper.find(keyword, where_pos)
+                    if pos != -1 and pos < insert_pos:
+                        insert_pos = pos
+                
+                # Insert filters with AND
+                filter_str = ' AND ' + ' AND '.join(filters_needed)
+                sql = sql[:insert_pos].rstrip() + filter_str + ' ' + sql[insert_pos:]
+        else:
+            # No WHERE clause - add one
+            # Find position before GROUP BY/HAVING/ORDER BY/LIMIT
+            insert_keywords = ['GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT']
+            insert_pos = len(sql)
+            for keyword in insert_keywords:
+                pos = sql_upper.find(keyword)
+                if pos != -1 and pos < insert_pos:
+                    insert_pos = pos
+            
+            # Insert WHERE clause
+            filter_str = '\nWHERE ' + ' AND '.join(where_clauses)
+            sql = sql[:insert_pos].rstrip() + filter_str + '\n' + sql[insert_pos:]
+        
+        return sql
     
     # Pre-execution SQL Validation
     @trace_step('validate_sql')
@@ -1165,6 +1427,12 @@ If date filters exist, ensure you're filtering on the correct table columns.
 
     def _build(self):
         g = StateGraph(SQLGraphState)
+        
+        # Domain ontology nodes (new)
+        g.add_node("extract_domain_terms", self._extract_domain_terms)
+        g.add_node("resolve_domain_terms", self._resolve_domain_terms)
+        
+        # Existing nodes
         g.add_node("select_tables", self._select_tables)
         g.add_node("filter_relationships", self._filter_relationships)
         g.add_node("plan_joins", self._plan_joins)
@@ -1174,7 +1442,12 @@ If date filters exist, ensure you're filtering on the correct table columns.
         g.add_node("execute", self._execute_and_validate)
         g.add_node("finalize", self._finalize)
 
-        g.set_entry_point("select_tables")
+        # Start with domain term extraction
+        g.set_entry_point("extract_domain_terms")
+        g.add_edge("extract_domain_terms", "resolve_domain_terms")
+        g.add_edge("resolve_domain_terms", "select_tables")
+        
+        # Existing edges
         g.add_edge("select_tables", "filter_relationships")
         g.add_edge("filter_relationships", "plan_joins")
         g.add_edge("plan_joins", "generate_sql")
@@ -1216,6 +1489,8 @@ If date filters exist, ensure you're filtering on the correct table columns.
         """
         state: SQLGraphState = {
             "question": question,
+            "domain_terms": [],
+            "domain_resolutions": [],
             "tables": [],
             "allowed_relationships": [],
             "join_plan": "",
@@ -1242,6 +1517,8 @@ If date filters exist, ensure you're filtering on the correct table columns.
         """
         state: SQLGraphState = {
             "question": question,
+            "domain_terms": [],
+            "domain_resolutions": [],
             "tables": [],
             "allowed_relationships": [],
             "join_plan": "",

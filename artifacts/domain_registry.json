@@ -1,0 +1,188 @@
+{
+  "version": 1,
+  "description": "Domain vocabulary registry mapping business concepts to database schema",
+  "terms": {
+    "crane": {
+      "entity": "asset",
+      "description": "Heavy lifting equipment used in construction and industrial settings",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        },
+        "fallback": {
+          "table": "dynamicAttributeValue",
+          "conditions": {
+            "entityName": "asset",
+            "dynamicAttribute.key": ["equipment_category", "equipment_type"]
+          },
+          "confidence": 0.3
+        }
+      }
+    },
+    "forklift": {
+      "entity": "asset",
+      "description": "Material handling equipment for lifting and moving goods",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        }
+      }
+    },
+    "hoist": {
+      "entity": "asset",
+      "description": "Mechanical device for lifting and lowering loads",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        }
+      }
+    },
+    "action_item": {
+      "entity": "inspection_finding",
+      "description": "Inspection findings that require corrective action",
+      "resolution": {
+        "primary": {
+          "table": "inspectionQuestionAnswer",
+          "column": "isActionItem",
+          "match_type": "boolean",
+          "value": true,
+          "confidence": 1.0
+        }
+      }
+    },
+    "unsafe": {
+      "entity": "inspection_finding",
+      "description": "Safety issues or hazards identified during inspections",
+      "resolution": {
+        "primary": {
+          "table": "inspectionQuestionAnswer",
+          "column": "isActionItem",
+          "match_type": "boolean",
+          "value": true,
+          "confidence": 0.8,
+          "note": "Unsafe conditions typically generate action items"
+        }
+      }
+    },
+    "failed_inspection": {
+      "entity": "inspection",
+      "description": "Inspections that did not pass or have critical findings",
+      "resolution": {
+        "primary": {
+          "table": "inspectionCertificationStatusOption",
+          "column": "name",
+          "match_type": "semantic",
+          "confidence": 0.8,
+          "note": "Look for status like 'Failed', 'Rejected', 'Not Approved'"
+        },
+        "secondary": {
+          "table": "inspectionQuestionAnswer",
+          "column": "isActionItem",
+          "match_type": "boolean",
+          "value": true,
+          "confidence": 0.7,
+          "note": "Failed inspections often have action items"
+        }
+      }
+    },
+    "truck": {
+      "entity": "asset",
+      "description": "Commercial vehicles used for transportation",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        }
+      }
+    },
+    "trailer": {
+      "entity": "asset",
+      "description": "Unpowered vehicles towed by trucks",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        }
+      }
+    },
+    "generator": {
+      "entity": "asset",
+      "description": "Power generation equipment",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        }
+      }
+    },
+    "compressor": {
+      "entity": "asset",
+      "description": "Air compression equipment",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        }
+      }
+    }
+  }
+}

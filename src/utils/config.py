@@ -97,6 +97,12 @@ class Settings(BaseSettings):
     enable_sql_agent: bool = Field(default=True)  # Enable SQL agent for database queries
     enable_rag_agent: bool = Field(default=True)  # Enable RAG agent for document retrieval
     
+    # Domain Ontology Configuration
+    domain_registry_enabled: bool = Field(default=True)  # Enable domain ontology layer
+    domain_registry_path: str = Field(default="artifacts/domain_registry.json")  # Path to domain vocabulary registry
+    domain_extraction_enabled: bool = Field(default=True)  # Enable LLM-based domain term extraction
+    domain_fallback_to_text_search: bool = Field(default=True)  # Fallback to text search when no domain match
+    
     # Token Limits
     max_context_tokens: int = Field(default=120000)
     max_output_tokens: int = Field(default=4000)
