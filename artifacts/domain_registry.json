@@ -10,7 +10,10 @@
           "table": "asset",
           "columns": ["name", "manufacturer", "modelNumber"],
           "match_type": "text_search",
-          "confidence": 0.95
+          "confidence": 0.95,
+          "exclude_columns": {
+            "asset": ["customerLocationId"]
+          }
         },
         "secondary": {
           "table": "assetType",
@@ -91,7 +94,6 @@
         }
       }
     },
-
     "truck": {
       "entity": "asset",
       "description": "Commercial vehicles used for transportation",
@@ -165,20 +167,72 @@
       }
     },
     "inspection_questions": {
-      "entity": "inspection_detail",
-      "description": "Questions and answers from inspection forms, including findings and responses",
+      "entity": "inspection_form_questions",
+      "description": "Explicit inspection FORM CONTENT: individual questions and their recorded answers. Requires the user to explicitly ask for questions, answers, or form details.",
+      "requires_explicit_terms": ["question", "questions", "answer", "answers", "form", "checklist"],
+      "requires_atomic_signals": ["inspection"],
       "resolution": {
         "primary": {
-          "tables": ["inspectionQuestion", "inspectionQuestionAnswer"],
+          "tables": [
+            "inspection",
+            "inspectionTemplateWorkOrder",
+            "inspectionTemplate",
+            "inspectionSection",
+            "inspectionQuestionGroup",
+            "inspectionQuestion"
+          ],
           "match_type": "structural",
           "confidence": 0.95,
-          "note": "Always include both tables together - they form a parent-child relationship"
+          "note": "Always include both tables together - they form a parent-child relationship",
+          "bridge_tables": ["inspectionQuestionGroup"],
+          "exclude_bridge_patterns": ["QAAttachment", "Signature", "Guidance", "TypeOption", "Configuration", "TemplateWorkOrder"]
+        }
+      }
+    },
+    "inspection_questions_and_answers": {
+      "entity": "inspection_form_questions_and_answers",
+      "description": "Explicit inspection FORM CONTENT: all questions and their recorded answers for a specific inspection. Requires the user to explicitly ask for questions, answers, or form details.",
+      "requires_explicit_terms": ["question", "questions", "answer", "answers", "form", "checklist"],
+      "requires_atomic_signals": ["inspection"],
+      "resolution": {
+        "primary": {
+          "tables": [
+            "inspection",
+            "inspectionTemplateWorkOrder",
+            "inspectionTemplate",
+            "inspectionSection",
+            "inspectionQuestionGroup",
+            "inspectionQuestion",
+            "inspectionQuestionAnswer"
+          ],
+          "match_type": "structural",
+          "confidence": 1.0,
+          "note": "This is a hierarchical inspection flow: inspection → template → sections → groups → questions → answers",
+          "anchor_table": "inspection",
+          "bridge_tables": [
+            "inspectionTemplateWorkOrder",
+            "inspectionTemplate",
+            "inspectionSection",
+            "inspectionQuestionGroup",
+            "inspectionQuestion",
+            "inspectionQuestionAnswer"
+          ],
+          "exclude_bridge_patterns": [
+            "inspectionConfiguration",
+            "inspectionGuidance",
+            "inspectionSignature",
+            "inspectionTypeOption",
+            "attachment",
+            "media"
+          ]
         }
       }
     },
     "safety_questions": {
       "entity": "safety_detail",
-      "description": "Questions and answers from safety forms and assessments",
+      "description": "Explicit safety FORM CONTENT: individual questions and their recorded answers. Requires the user to explicitly ask for questions, answers, or form details.",
+      "requires_explicit_terms": ["question", "questions", "answer", "answers", "form", "checklist"],
+      "requires_atomic_signals": ["safety"],
       "resolution": {
         "primary": {
           "tables": ["safetyQuestion", "safetyQuestionAnswer"],
@@ -190,7 +244,9 @@
     },
     "service_questions": {
       "entity": "service_detail",
-      "description": "Questions and answers from service forms and checklists",
+      "description": "Explicit service FORM CONTENT: individual questions and their recorded answers. Requires the user to explicitly ask for questions, answers, or form details.",
+      "requires_explicit_terms": ["question", "questions", "answer", "answers", "form", "checklist"],
+      "requires_atomic_signals": ["service"],
       "resolution": {
         "primary": {
           "tables": ["serviceQuestion", "serviceQuestionAnswer"],

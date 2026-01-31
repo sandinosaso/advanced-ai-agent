@@ -242,5 +242,98 @@ def test_extract_domain_terms_integration(domain_ontology):
     assert "crane" in terms or "action_item" in terms
 
 
+# --- Two-phase extraction: compute_final_registry_terms (Pass 2 deterministic) ---
+
+
+@pytest.fixture
+def registry_with_compound(tmp_path):
+    """Registry with atomic terms and a compound term (inspection_questions) for Pass 2 tests."""
+    registry = {
+        "version": 1,
+        "terms": {
+            "crane": {
+                "entity": "asset",
+                "resolution": {
+                    "primary": {
+                        "table": "assetType",
+                        "column": "name",
+                        "match_type": "semantic",
+                        "confidence": 0.9
+                    }
+                }
+            },
+            "action_item": {
+                "entity": "inspection_finding",
+                "resolution": {
+                    "primary": {
+                        "table": "inspectionQuestionAnswer",
+                        "column": "isActionItem",
+                        "match_type": "boolean",
+                        "value": True,
+                        "confidence": 1.0
+                    }
+                }
+            },
+            "inspection_questions": {
+                "entity": "inspection_form",
+                "requires_explicit_terms": ["question", "questions", "answer", "answers", "form", "checklist"],
+                "requires_atomic_signals": ["inspection"],
+                "resolution": {
+                    "primary": {
+                        "tables": ["inspectionQuestion", "inspectionQuestionAnswer"],
+                        "confidence": 0.95
+                    }
+                }
+            }
+        }
+    }
+    path = tmp_path / "registry_with_compound.json"
+    with open(path, "w") as f:
+        json.dump(registry, f)
+    return DomainOntology(str(path))
+
+
+def test_compute_final_registry_terms_negative_gate_excludes_question_terms(registry_with_compound):
+    """Negative gate: when question has no explicit question/answer/form/checklist, inspection_questions must not be returned."""
+    question = "Find crane inspections for ABC COKE"
+    atomic_signals = ["crane", "inspection"]
+    result = registry_with_compound.compute_final_registry_terms(question, atomic_signals)
+    assert "inspection_questions" not in result
+    assert "crane" in result
+
+
+def test_compute_final_registry_terms_simple_term_in_atomic_signals(registry_with_compound):
+    """Simple (atomic-only) term is returned when present in atomic signals."""
+    question = "Find cranes"
+    atomic_signals = ["crane"]
+    result = registry_with_compound.compute_final_registry_terms(question, atomic_signals)
+    assert "crane" in result
+    assert "inspection_questions" not in result
+
+
+def test_compute_final_registry_terms_compound_included_when_explicit_and_atomic(registry_with_compound):
+    """Compound term is included only when question has explicit word and atomic signals are present."""
+    question = "Show me the questions and answers for that inspection"
+    atomic_signals = ["inspection", "question"]
+    result = registry_with_compound.compute_final_registry_terms(question, atomic_signals)
+    assert "inspection_questions" in result
+
+
+def test_compute_final_registry_terms_compound_excluded_without_explicit_word(registry_with_compound):
+    """Compound term is excluded when question does not mention question/answer/form/checklist."""
+    question = "Show inspection data"
+    atomic_signals = ["inspection"]
+    result = registry_with_compound.compute_final_registry_terms(question, atomic_signals)
+    assert "inspection_questions" not in result
+
+
+def test_compute_final_registry_terms_compound_excluded_without_atomic_signal(registry_with_compound):
+    """Compound term requiring atomic signal is excluded when that signal is not in atomic_signals."""
+    question = "Show me the questions for the form"
+    atomic_signals = ["question"]
+    result = registry_with_compound.compute_final_registry_terms(question, atomic_signals)
+    assert "inspection_questions" not in result
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

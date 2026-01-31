@@ -8,7 +8,7 @@ import functools
 import ast
 import re
 from pathlib import Path
-from typing import TypedDict, List, Dict, Any, Optional
+from typing import TypedDict, List, Dict, Any, Optional, Set
 
 from langgraph.graph import StateGraph, END
 
@@ -595,13 +595,38 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
         )
         
         # Automatically add bridge tables that connect selected tables (use same confidence as pipeline)
-        # This ensures we include tables like employeeCrew when both crew and employee are selected,
-        # and tables like inspectionQuestionGroup when both inspectionQuestion and inspectionQuestionAnswer are selected.
-        bridge_tables = self._find_bridge_tables(selected, rels, confidence_threshold=confidence_threshold)
+        # Filter by relevance: only keep bridges on shortest paths or domain-preferred (e.g. inspectionQuestionGroup for inspection_questions).
+        candidate_bridges = self._find_bridge_tables(selected, rels, confidence_threshold=confidence_threshold)
+        on_path = self._get_bridges_on_paths(selected)
+        domain_bridges = self._get_domain_bridges(state.get("domain_resolutions", []))
+        relevant = on_path | (domain_bridges & candidate_bridges)
+        # Apply domain exclude_bridge_patterns: drop bridges whose name contains any pattern (case-insensitive)
+        exclude_patterns = self._get_exclude_bridge_patterns(state.get("domain_resolutions", []))
+        if exclude_patterns:
+            relevant = {t for t in relevant if not any(p.lower() in t.lower() for p in exclude_patterns)}
+        if relevant:
+            bridge_tables = relevant
+        elif candidate_bridges:
+            bridge_tables = candidate_bridges
+        else:
+            bridge_tables = set()
         if bridge_tables:
             logger.info(f"Auto-adding {len(bridge_tables)} bridge tables: {bridge_tables}")
             selected.update(bridge_tables)
             state["tables"] = list(selected)
+
+        # Domain exclude_columns: remove relationships that use forbidden columns (e.g. asset.customerLocationId)
+        excluded_columns = self._get_excluded_columns(state.get("domain_resolutions", []))
+        if excluded_columns:
+            before = len(expanded_relationships)
+            expanded_relationships = [
+                r for r in expanded_relationships
+                if r.get("from_column") not in excluded_columns.get(r.get("from_table"), set())
+                and r.get("to_column") not in excluded_columns.get(r.get("to_table"), set())
+            ]
+            if len(expanded_relationships) < before:
+                logger.info(f"Filtered {before - len(expanded_relationships)} relationships using domain exclude_columns")
+        state["allowed_relationships"] = expanded_relationships
 
         # Log some example paths for debugging
         if len(expanded_relationships) > len(direct_relationships):
@@ -618,7 +643,6 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
                     continue
                 break
 
-        state["allowed_relationships"] = expanded_relationships
         return state
 
     # 3) Join Planner (correctness anchor)
@@ -634,12 +658,19 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
         allowed_rels = state['allowed_relationships']
         
         # Use path finder to suggest optimal paths between selected tables
-        # This provides concrete paths that the LLM can validate
+        # Skip paths that use domain exclude_columns (e.g. asset.customerLocationId)
+        excluded_columns = self._get_excluded_columns(state.get("domain_resolutions", []))
         suggested_paths = []
         for i, table1 in enumerate(selected_tables):
             for table2 in selected_tables[i+1:]:
                 path = self.path_finder.find_shortest_path(table1, table2, max_hops=4)
                 if path:
+                    if excluded_columns and any(
+                        rel.get("from_column") in excluded_columns.get(rel.get("from_table"), set())
+                        or rel.get("to_column") in excluded_columns.get(rel.get("to_table"), set())
+                        for rel in path
+                    ):
+                        continue
                     path_desc = self.path_finder.get_path_description(path)
                     # Extract all tables in the path (including bridge tables)
                     tables_in_path = set()
@@ -711,6 +742,23 @@ To connect crew to employee, use this EXACT path from the suggestions above:
             domain_filter_hints = "\n" + format_domain_context(domain_resolutions) + "\n"
             domain_filter_hints += "IMPORTANT: Plan joins to include tables needed for domain filters.\n"
             domain_filter_hints += "The WHERE clause will filter based on these domain concepts.\n"
+
+        # When a term has anchor_table and ordered tables, prefer that join chain (e.g. inspection → template → section → group → question → answer)
+        selected_set = set(selected_tables)
+        if self.domain_ontology and domain_resolutions:
+            terms_registry = self.domain_ontology.registry.get("terms", {})
+            for res in domain_resolutions:
+                term = res.get("term")
+                if not term or term not in terms_registry:
+                    continue
+                primary = terms_registry[term].get("resolution", {}).get("primary", {})
+                anchor = primary.get("anchor_table")
+                chain_tables = primary.get("tables", [])
+                if anchor and len(chain_tables) >= 2 and set(chain_tables).issubset(selected_set):
+                    chain_str = " → ".join(chain_tables)
+                    domain_filter_hints += f"\nPREFERRED JOIN CHAIN for this domain (use in JOIN_PATH, in order): {chain_str}\n"
+                    domain_filter_hints += "Include all tables in this chain; do not skip to a shorter path.\n"
+                    break  # one chain hint per request
         
         prompt = f"""
 You are planning SQL joins. You MUST ONLY use the allowed relationships.
@@ -733,9 +781,10 @@ Direct and transitive relationships available (for reference only - prefer sugge
 {domain_filter_hints}
 Task:
 - PRIMARY: Use the suggested paths above - they are computed by the graph algorithm and are correct
+- If a PREFERRED JOIN CHAIN is stated above for this domain, USE THAT CHAIN in order (do not use a shorter path that skips tables in the chain)
 - If a suggested path exists for the tables you need to connect, USE IT EXACTLY as shown
 - Only construct your own path if no suggested path exists
-- Prefer shorter paths (fewer hops) when multiple options exist
+- Prefer shorter paths (fewer hops) when multiple options exist, unless a PREFERRED JOIN CHAIN is given
 - Use cardinality to prefer safer joins (N:1 / 1:1 over N:N)
 - CRITICAL: If connecting two tables requires a bridge table (like 'user' connecting 'crew' to 'employee'), 
   you MUST include ALL intermediate tables in the JOIN_PATH. Do NOT skip bridge tables.
@@ -781,11 +830,17 @@ NOTES:
         all_tables = set(state["tables"]) | tables_from_join_plan
         
         # Build table schemas for ALL tables (selected + bridge) with their actual columns
-        # This ensures the LLM knows exactly what columns are available in each table
+        # Domain exclude_columns: omit forbidden columns so the LLM cannot use them
+        excluded_columns = self._get_excluded_columns(state.get("domain_resolutions", []))
         table_schemas = []
+        forbidden_columns_flat: List[str] = []
         for table_name in sorted(all_tables):
             if table_name in self.join_graph["tables"]:
                 columns = self.join_graph["tables"][table_name].get("columns", [])
+                excluded = excluded_columns.get(table_name, set())
+                columns = [c for c in columns if c not in excluded]
+                if excluded:
+                    forbidden_columns_flat.extend(f"{table_name}.{c}" for c in excluded)
                 # Show columns up to configured limit so LLM has complete information
                 columns_str = ', '.join(columns[:settings.sql_max_columns_in_schema])
                 if len(columns) > settings.sql_max_columns_in_schema:
@@ -796,6 +851,9 @@ NOTES:
                 logger.warning(f"Table '{table_name}' mentioned in join plan but not found in join graph")
         
         schema_context = "\n".join(table_schemas)
+        excluded_columns_hint = ""
+        if forbidden_columns_flat:
+            excluded_columns_hint = "\n\nDo NOT use these columns (forbidden for this query): " + ", ".join(forbidden_columns_flat) + "\n"
 
         # Parse JOIN_PATH to extract explicit join steps
         join_path_steps = self._parse_join_path_steps(state.get('join_plan', ''))
@@ -865,7 +923,7 @@ Generate a MySQL SELECT query using ONLY the columns shown below.
 
 All tables needed for this query (with their actual columns):
 {schema_context}
-
+{excluded_columns_hint}
 CRITICAL RULES:
 - Use ONLY the columns listed above for each table - do NOT guess or invent column names
 - Follow the JOIN_PATH EXACTLY step by step - do NOT skip any tables or steps
@@ -1177,6 +1235,96 @@ Return ONLY the SQL query, nothing else.
                     logger.info(f"Found bridge table '{original_name}' connecting {len(canonical_connected)} selected tables: {list(canonical_connected)}")
         
         return bridge_tables
+
+    def _get_bridges_on_paths(self, selected_tables: set) -> set:
+        """
+        Return tables that appear on the shortest path between some pair of selected tables
+        (excluding the selected tables themselves). Minimal set actually needed to join selected tables.
+        """
+        on_path = set()
+        selected_list = list(selected_tables)
+        for i, t1 in enumerate(selected_list):
+            for t2 in selected_list[i + 1 :]:
+                if t1 == t2:
+                    continue
+                path = self.path_finder.find_shortest_path(t1, t2, max_hops=4)
+                if not path:
+                    continue
+                for rel in path:
+                    on_path.add(rel.get("from_table"))
+                    on_path.add(rel.get("to_table"))
+        return on_path - selected_tables
+
+    def _get_domain_bridges(self, domain_resolutions: List[Dict[str, Any]]) -> set:
+        """
+        Return preferred bridge tables for the current domain concept(s) from the registry.
+        Only tables that exist in the join graph are returned.
+        """
+        if not domain_resolutions or not self.domain_ontology:
+            return set()
+        terms_registry = self.domain_ontology.registry.get("terms", {})
+        graph_tables = self.join_graph["tables"]
+        out = set()
+        for res in domain_resolutions:
+            term = res.get("term")
+            if not term or term not in terms_registry:
+                continue
+            primary = terms_registry[term].get("resolution", {}).get("primary", {})
+            bridge_list = primary.get("bridge_tables", [])
+            for t in bridge_list:
+                if t in graph_tables:
+                    out.add(t)
+        return out
+
+    def _get_exclude_bridge_patterns(self, domain_resolutions: List[Dict[str, Any]]) -> List[str]:
+        """
+        Return substrings that should exclude a bridge table when present in its name.
+        Used when a domain term (e.g. inspection_questions) wants to drop noise bridges
+        like inspectionQAAttachment, inspectionQuestionGuidance, etc.
+        """
+        if not domain_resolutions or not self.domain_ontology:
+            return []
+        terms_registry = self.domain_ontology.registry.get("terms", {})
+        patterns: List[str] = []
+        for res in domain_resolutions:
+            term = res.get("term")
+            if not term or term not in terms_registry:
+                continue
+            primary = terms_registry[term].get("resolution", {}).get("primary", {})
+            for p in primary.get("exclude_bridge_patterns", []):
+                if p and p not in patterns:
+                    patterns.append(p)
+        return patterns
+
+    def _get_excluded_columns(self, domain_resolutions: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
+        """
+        Return per-table column names that must not be used when this domain is active.
+        Used when a term (e.g. crane) wants to forbid certain columns (e.g. asset.customerLocationId).
+        Keys are canonical table names from the join graph.
+        """
+        if not domain_resolutions or not self.domain_ontology:
+            return {}
+        terms_registry = self.domain_ontology.registry.get("terms", {})
+        table_name_map = {t.lower(): t for t in self.join_graph["tables"].keys()}
+        out: Dict[str, Set[str]] = {}
+        for res in domain_resolutions:
+            term = res.get("term")
+            if not term or term not in terms_registry:
+                continue
+            primary = terms_registry[term].get("resolution", {}).get("primary", {})
+            exclude = primary.get("exclude_columns", {})
+            if not isinstance(exclude, dict):
+                continue
+            for table, cols in exclude.items():
+                if not cols:
+                    continue
+                canonical = table_name_map.get(table.lower(), table)
+                if canonical not in out:
+                    out[canonical] = set()
+                for c in cols if isinstance(cols, list) else [cols]:
+                    if c:
+                        out[canonical].add(c)
+        return out
     
     def _extract_tables_from_join_plan(self, join_plan: str) -> set:
         """
