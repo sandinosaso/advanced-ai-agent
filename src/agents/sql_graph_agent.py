@@ -32,6 +32,27 @@ JOIN_GRAPH_PATH = _project_root / "artifacts" / "join_graph_merged.json"
 AUDIT_COLUMNS = {'createdBy', 'updatedBy', 'createdAt', 'updatedAt'}
 
 
+def _entity_to_id_field(entity: str) -> Optional[str]:
+    """
+    Map referenced_entity (e.g. 'inspection', 'work order') to the standard id field name
+    (e.g. inspectionId, workOrderId) so the SQL generator can filter by the main table's PK.
+    """
+    if not entity or not isinstance(entity, str):
+        return None
+    s = entity.strip()
+    if not s:
+        return None
+    # Already camelCase with Id suffix (e.g. workOrder)
+    if s.endswith("Id"):
+        return s
+    # Split on spaces/caps and camelCase: "work order" -> workOrder, "inspection" -> inspection
+    parts = re.sub(r"([A-Z])", r" \1", s).split()
+    if not parts:
+        return None
+    camel = parts[0].lower() + "".join(p.title() for p in parts[1:])
+    return f"{camel}Id" if camel else None
+
+
 class SQLGraphState(TypedDict):
     question: str
     domain_terms: List[str]  # Extracted business terms (e.g., ["crane", "action_item"])
@@ -49,6 +70,10 @@ class SQLGraphState(TypedDict):
     last_sql_error: Optional[str]  # Store last SQL error message
     correction_history: Optional[List[Dict[str, Any]]]  # Track correction attempts
     validation_errors: Optional[List[str]]  # Pre-execution validation errors
+    # Follow-up question support
+    previous_results: Optional[List[Dict[str, Any]]]  # Last N query results from memory
+    is_followup: bool  # Flag indicating this is a follow-up question
+    referenced_ids: Optional[Dict[str, List]]  # IDs from previous results being referenced
 
 
 def load_join_graph() -> Dict[str, Any]:
@@ -58,21 +83,43 @@ def load_join_graph() -> Dict[str, Any]:
     Audit columns (createdBy, updatedBy, createdAt, updatedAt) are metadata fields
     for tracking changes, not semantic business relationships. They should not be
     used for determining join paths.
+    
+    Normalizes relationship table names to the canonical keys from graph["tables"]
+    so that mixed casing (e.g. InspectionQuestion vs inspectionQuestion) does not
+    create duplicate nodes or wrong bridge table counts.
     """
     with open(str(JOIN_GRAPH_PATH), "r", encoding="utf-8") as f:
         graph = json.load(f)
     
+    # Canonical table names: map lowercased name -> key from graph["tables"]
+    table_keys = list(graph["tables"].keys())
+    canonical_by_lower = {t.lower(): t for t in table_keys}
+
+    def canonical_table(name: str) -> str:
+        if not name:
+            return name
+        return canonical_by_lower.get(name.lower(), name)
+
     # Filter out audit column relationships
     original_count = len(graph["relationships"])
-    graph["relationships"] = [
+    filtered_rels = [
         r for r in graph["relationships"]
         if r["from_column"] not in AUDIT_COLUMNS
     ]
+    # Normalize from_table / to_table to canonical keys so path finder and bridge logic see one node per table
+    graph["relationships"] = []
+    for r in filtered_rels:
+        r = dict(r)
+        r["from_table"] = canonical_table(r.get("from_table", ""))
+        r["to_table"] = canonical_table(r.get("to_table", ""))
+        graph["relationships"].append(r)
     filtered_count = original_count - len(graph["relationships"])
-    
-    logger.info(f"Loaded join graph: {len(graph['tables'])} tables, {len(graph['relationships'])} relationships "
-                f"(filtered {filtered_count} audit column relationships)")
-    
+
+    logger.info(
+        f"Loaded join graph: {len(graph['tables'])} tables, {len(graph['relationships'])} relationships "
+        f"(filtered {filtered_count} audit column relationships)"
+    )
+
     return graph
 
 
@@ -160,6 +207,148 @@ class SQLGraphAgent:
 
         logger.info("SQLGraphAgent initialized with path finder")
 
+    # 0a) Follow-up Question Detection
+    @trace_step('detect_followup')
+    def _detect_followup_question(self, state: SQLGraphState) -> SQLGraphState:
+        """
+        Detect if the question is a follow-up referencing previous results.
+        
+        Uses LLM to classify if the question references previous query results
+        and extracts what entities/IDs are being referenced.
+        
+        Example:
+            Previous: "Find crane inspections for ABC COKE"
+            Current: "Show me the questions for that inspection"
+            → is_followup=True, referenced_ids extracted
+        """
+        logger.info(f"In node follow-up question settings.followup_detection_enabled: {settings.followup_detection_enabled}")
+        if not settings.followup_detection_enabled:
+            state['is_followup'] = False
+            state['referenced_ids'] = None
+            return state
+        
+        # Check if we have previous results
+        previous_results = state.get('previous_results')
+        logger.info(f"In node follow-up question I have previous results: {previous_results}")
+        if not previous_results:
+            state['is_followup'] = False
+            state['referenced_ids'] = None
+            return state
+        
+        question = state['question']
+        
+        # Import QueryResultMemory to format context
+        from src.utils.query_memory import QueryResultMemory
+        
+        # Create temporary memory from previous results
+        temp_memory = QueryResultMemory.from_dict(
+            previous_results,
+            max_results=settings.query_result_memory_size
+        )
+
+        logger.info(f"In node follow-up question I have temp_memory: {temp_memory}")
+        
+        # Format previous results for context
+        context = temp_memory.format_for_context(
+            n=3,
+            max_tokens=settings.followup_max_context_tokens,
+            include_sample_rows=True
+        )
+
+        logger.info(f"In node follow-up question I have context: {context}")
+        
+        if not context:
+            state['is_followup'] = False
+            state['referenced_ids'] = None
+            return state
+        
+        # LLM prompt to detect follow-up
+        prompt = f"""Analyze if this question is a follow-up referencing previous query results.
+
+{context}
+
+CURRENT QUESTION: {question}
+
+TASK:
+Determine if the current question references the previous results above.
+
+Look for:
+- Reference words: "that", "those", "the same", "previous", "from above", "for it", "for them"
+- Implicit references: "show me the questions" (implies "for that inspection")
+- Context-dependent questions that don't make sense without previous results
+
+Respond with ONLY a JSON object (no markdown, no explanation):
+{{
+  "is_followup": true/false,
+  "reasoning": "brief explanation",
+  "referenced_entity": "inspection/workOrder/employee/etc or null",
+  "referenced_ids": {{"inspectionId": ["<field name from Key IDs above>"], ...}} or null
+}}
+
+If is_followup=true: set referenced_ids to the KEY NAMES only (e.g. inspectionId, workOrderId) that match the entity being referenced. Use the exact key names from "Key IDs found" above - the system will substitute the actual ID values automatically. Do NOT invent placeholder values like id1 or [SPECIFIC_INSPECTION_ID].
+If is_followup=false, set referenced_entity and referenced_ids to null.
+"""
+        
+        try:
+            response = self.llm.invoke(prompt)
+            raw = str(response.content).strip() if hasattr(response, 'content') and response.content else ""
+            
+            # Clean up markdown code blocks if present
+            if raw.startswith("```"):
+                lines = raw.split("\n")
+                # Remove first and last lines (```json and ```)
+                raw = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
+            
+            # Parse JSON response
+            result = json.loads(raw)
+            
+            is_followup = result.get("is_followup", False)
+            referenced_ids = result.get("referenced_ids")
+            referenced_entity = result.get("referenced_entity")
+            reasoning = result.get("reasoning", "")
+            
+            # CRITICAL: Never use LLM-provided ID values - they may be placeholders like
+            # "id1", "[SPECIFIC_INSPECTION_ID]", etc. Always use actual IDs from memory.
+            if is_followup:
+                actual_ids = temp_memory.get_all_identifiers(n=1)
+                if actual_ids:
+                    if referenced_ids and isinstance(referenced_ids, dict):
+                        # Use LLM keys (which entity/field is referenced) but real values from memory
+                        merged = {
+                            k: actual_ids[k] for k in referenced_ids
+                            if k in actual_ids and actual_ids[k]
+                        }
+                        referenced_ids = merged if merged else actual_ids
+                    else:
+                        referenced_ids = actual_ids
+                    # When the question references a main entity (e.g. "that inspection"), ensure we
+                    # add that entity's PK. Previous result stores it as "id"; map entity -> entityId.
+                    if referenced_entity and "id" in actual_ids and actual_ids["id"]:
+                        id_field_for_entity = _entity_to_id_field(referenced_entity)
+                        if id_field_for_entity and (not referenced_ids or id_field_for_entity not in referenced_ids):
+                            referenced_ids = dict(referenced_ids) if referenced_ids else {}
+                            referenced_ids[id_field_for_entity] = actual_ids["id"]
+                else:
+                    referenced_ids = None
+            
+            state['is_followup'] = is_followup
+            state['referenced_ids'] = referenced_ids if is_followup else None
+            
+            if is_followup:
+                logger.info(
+                    f"✅ Detected follow-up question: entity={referenced_entity}, "
+                    f"IDs={referenced_ids}, reasoning={reasoning}"
+                )
+            else:
+                logger.info(f"Not a follow-up question: {reasoning}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to detect follow-up question: {e}. Treating as new question.")
+            state['is_followup'] = False
+            state['referenced_ids'] = None
+        
+        return state
+    
     # 0) Domain Term Extraction
     @trace_step('extract_domain_terms')
     def _extract_domain_terms(self, state: SQLGraphState) -> SQLGraphState:
@@ -245,8 +434,52 @@ class SQLGraphAgent:
         - We select based on what exists, not what we want to rewrite
         - Rewriting happens later in SQL generation
         - Domain resolutions automatically add required tables
+        - For follow-up questions, uses previous query context
         """
         all_tables = list(self.join_graph["tables"].keys())
+        
+        # Build follow-up context if this is a follow-up question
+        followup_context = ""
+        if state.get('is_followup') and state.get('previous_results'):
+            from src.utils.query_memory import QueryResultMemory
+            
+            # Create temporary memory from previous results
+            temp_memory = QueryResultMemory.from_dict(
+                state['previous_results'],
+                max_results=settings.query_result_memory_size
+            )
+            
+            # Get the most recent result
+            recent = temp_memory.get_recent_results(n=1)
+            if recent:
+                last_result = recent[0]
+                referenced_ids = state.get('referenced_ids', {})
+                
+                followup_context = f"""
+FOLLOW-UP QUESTION CONTEXT:
+This is a follow-up to a previous query. Use the context below to guide your table selection.
+
+Previous Question: {last_result.question}
+Tables Used Previously: {', '.join(last_result.tables_used) if last_result.tables_used else 'N/A'}
+Rows Returned: {last_result.row_count}
+
+Key IDs Available (you can use these directly in WHERE clauses):
+"""
+                if referenced_ids:
+                    for id_field, values in referenced_ids.items():
+                        display_values = values[:5]
+                        more = f" (and {len(values) - 5} more)" if len(values) > 5 else ""
+                        followup_context += f"  - {id_field}: {display_values}{more}\n"
+                else:
+                    followup_context += "  (No specific IDs extracted - use tables from previous query)\n"
+                
+                followup_context += f"""
+INSTRUCTIONS FOR FOLLOW-UP:
+- You already have the IDs above - use them directly in your WHERE clause
+- Select tables needed to answer the NEW information requested
+- You may need to include some tables from the previous query to join with the IDs
+- Don't rebuild the entire previous query - we already have the target IDs
+"""
         
         # Build domain context if available (lightweight version for table selection)
         domain_context = ""
@@ -274,7 +507,7 @@ Rules:
 - DO NOT invent table names that don't exist
 - Prefer always to show labels/name or any column with text instead of IDS use IDS just for joining tables/ grouping but not to show in the result unless explicitly asked for
   (make sure to include the table that has those names)
-{domain_context}
+{followup_context}{domain_context}
 Available tables (subset shown if large):
 {', '.join(all_tables[:settings.sql_max_tables_in_selection_prompt])}
 
@@ -361,9 +594,10 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
             f"(added {len(expanded_relationships) - len(direct_relationships)} transitive paths)"
         )
         
-        # Automatically add bridge tables that connect selected tables
-        # This ensures we include tables like employeeCrew when both crew and employee are selected
-        bridge_tables = self._find_bridge_tables(selected, rels, confidence_threshold=0.9)
+        # Automatically add bridge tables that connect selected tables (use same confidence as pipeline)
+        # This ensures we include tables like employeeCrew when both crew and employee are selected,
+        # and tables like inspectionQuestionGroup when both inspectionQuestion and inspectionQuestionAnswer are selected.
+        bridge_tables = self._find_bridge_tables(selected, rels, confidence_threshold=confidence_threshold)
         if bridge_tables:
             logger.info(f"Auto-adding {len(bridge_tables)} bridge tables: {bridge_tables}")
             selected.update(bridge_tables)
@@ -519,7 +753,7 @@ NOTES:
 - brief reasoning about path choice
 - explicitly state if using bridge tables and why
 """
-        logger.info(f"[PROMPT] plan_joins prompt:\n{prompt}")
+        logger.debug(f"[PROMPT] plan_joins prompt:\n{prompt}")
         response = self.llm.invoke(prompt)
         state["join_plan"] = str(response.content) if hasattr(response, 'content') and response.content else ""
         return state
@@ -566,6 +800,66 @@ NOTES:
         # Parse JOIN_PATH to extract explicit join steps
         join_path_steps = self._parse_join_path_steps(state.get('join_plan', ''))
         
+        # Build follow-up context with known IDs
+        followup_where_clause = ""
+        if state.get('is_followup') and state.get('referenced_ids'):
+            referenced_ids = state['referenced_ids']
+            followup_where_clause = "\n\nFOLLOW-UP QUERY - USE THESE KNOWN IDs:\n"
+            followup_where_clause += "=" * 70 + "\n"
+            followup_where_clause += "This is a follow-up question. You have these IDs from the previous query:\n\n"
+            
+            # Skip placeholder-like values (LLM may have returned [SPECIFIC_INSPECTION_ID], id1, etc.)
+            def _is_real_id(v: Any) -> bool:
+                s = str(v).strip()
+                if not s or s.startswith("[") or s.endswith("]") or "SPECIFIC_" in s.upper():
+                    return False
+                if s.lower() in ("id1", "id2", "id3", "id"):
+                    return False
+                return True
+
+            where_conditions = []
+            for id_field, values in referenced_ids.items():
+                real_values = [v for v in values if _is_real_id(v)][:10]
+                if not real_values:
+                    continue
+                # Determine which table this ID belongs to
+                # Try to infer table from ID field name (e.g., inspectionId -> inspection table)
+                table_name = id_field.replace('Id', '').replace('id', '')
+                if not table_name:  # e.g. id_field "id" -> empty; skip or infer from context
+                    continue
+                # Most tables use PK column "id"; when id_field is entityId (e.g. inspectionId),
+                # the column on that table is "id", not "inspectionId"
+                column_name = (
+                    "id"
+                    if (
+                        id_field.endswith("Id")
+                        and id_field != "id"
+                        and table_name
+                        and id_field == table_name + "Id"
+                    )
+                    else id_field
+                )
+                # Check if this table is in our selected tables
+                if table_name in all_tables or any(table_name.lower() == t.lower() for t in all_tables):
+                    if len(real_values) == 1:
+                        where_conditions.append(f"{table_name}.{column_name} = '{real_values[0]}'")
+                    else:
+                        # Multiple IDs - use IN clause
+                        values_str = "', '".join(str(v) for v in real_values)
+                        where_conditions.append(f"{table_name}.{column_name} IN ('{values_str}')")
+            
+            if where_conditions:
+                followup_where_clause += "CRITICAL - Include these WHERE conditions to filter by the referenced IDs:\n"
+                for condition in where_conditions:
+                    followup_where_clause += f"  - {condition}\n"
+                followup_where_clause += "\n"
+                followup_where_clause += "IMPORTANT:\n"
+                followup_where_clause += "- Use these exact IDs in your WHERE clause (copy the values above literally)\n"
+                followup_where_clause += "- Do NOT use placeholders like [SPECIFIC_INSPECTION_ID], [ID], or id1/id2\n"
+                followup_where_clause += "- Do NOT rebuild the filter from the previous query\n"
+                followup_where_clause += "- Focus on selecting the NEW data requested in the current question\n"
+                followup_where_clause += "=" * 70 + "\n"
+        
         prompt = f"""
 Generate a MySQL SELECT query using ONLY the columns shown below.
 
@@ -589,7 +883,7 @@ IMPORTANT FOR NAME/LABEL REQUESTS:
   * customer: use "name" column for customer name
   * crew: use "name" column for crew name
 - When replacing an ID with a name, make sure to SELECT the name column(s) and JOIN to the table that has the name
-
+{followup_where_clause}
 Question: {state['question']}
 
 Join plan (follow this EXACTLY, step by step):
@@ -602,7 +896,7 @@ you MUST include BOTH joins in your SQL. Do NOT skip the bridge table (user) and
 {self._build_domain_filter_instructions(state)}
 Return ONLY the SQL query, nothing else.
 """
-        logger.info(f"[PROMPT] generate_sql prompt:\n{prompt}")
+        logger.debug(f"[PROMPT] generate_sql prompt:\n{prompt}")
         response = self.llm.invoke(prompt)
         raw_sql = str(response.content).strip() if hasattr(response, 'content') and response.content else ""
         if raw_sql.startswith("```"):
@@ -872,14 +1166,15 @@ Return ONLY the SQL query, nothing else.
                 table_connections[from_table_lower].add(to_table_orig)  # Store original case
         
         # Find tables that connect 2+ selected tables (these are bridge tables)
+        # Use canonical names so we don't count the same table twice (e.g. InspectionQuestion vs inspectionQuestion)
         for table_name_lower, connected_tables in table_connections.items():
-            if len(connected_tables) >= 2:
+            canonical_connected = {table_name_map.get(t.lower(), t) for t in connected_tables if t}
+            if len(canonical_connected) >= 2:
                 # This table connects multiple selected tables - it's a bridge table
-                # Get original case name from join graph
                 if table_name_lower in table_name_map:
                     original_name = table_name_map[table_name_lower]
                     bridge_tables.add(original_name)
-                    logger.info(f"Found bridge table '{original_name}' connecting {len(connected_tables)} selected tables: {list(connected_tables)}")
+                    logger.info(f"Found bridge table '{original_name}' connecting {len(canonical_connected)} selected tables: {list(canonical_connected)}")
         
         return bridge_tables
     
@@ -1158,8 +1453,8 @@ INSTRUCTIONS:
 
 CORRECTED SQL QUERY:"""
         
-        logger.info(f"[PROMPT] correct_sql prompt (attempt {correction_attempts + 1}):\n{prompt}")
-        
+        logger.info(f"[PROMPT] correct_sql prompt (attempt {correction_attempts + 1}):\n")
+        logger.debug(f"[PROMPT] correct_sql prompt {prompt}")
         try:
             response = self.llm.invoke(prompt)
             corrected_sql = str(response.content).strip() if hasattr(response, 'content') and response.content else ""
@@ -1481,7 +1776,10 @@ If date filters exist, ensure you're filtering on the correct table columns.
     def _build(self):
         g = StateGraph(SQLGraphState)
         
-        # Domain ontology nodes (new)
+        # Follow-up detection node (new)
+        g.add_node("detect_followup", self._detect_followup_question)
+        
+        # Domain ontology nodes
         g.add_node("extract_domain_terms", self._extract_domain_terms)
         g.add_node("resolve_domain_terms", self._resolve_domain_terms)
         
@@ -1495,8 +1793,9 @@ If date filters exist, ensure you're filtering on the correct table columns.
         g.add_node("execute", self._execute_and_validate)
         g.add_node("finalize", self._finalize)
 
-        # Start with domain term extraction
-        g.set_entry_point("extract_domain_terms")
+        # Start with follow-up detection
+        g.set_entry_point("detect_followup")
+        g.add_edge("detect_followup", "extract_domain_terms")
         g.add_edge("extract_domain_terms", "resolve_domain_terms")
         g.add_edge("resolve_domain_terms", "select_tables")
         
@@ -1534,11 +1833,16 @@ If date filters exist, ensure you're filtering on the correct table columns.
         g.add_edge("finalize", END)
         return g.compile()
 
-    def query(self, question: str) -> str:
+    def query(self, question: str, previous_results: Optional[List[Dict[str, Any]]] = None) -> str:
         """
         Query the database and return the answer.
         
-        Returns the final_answer string. For structured data, use query_with_structured().
+        Args:
+            question: User's question
+            previous_results: Optional list of previous query results for follow-up questions
+        
+        Returns:
+            The final_answer string. For structured data, use query_with_structured().
         """
         state: SQLGraphState = {
             "question": question,
@@ -1557,13 +1861,24 @@ If date filters exist, ensure you're filtering on the correct table columns.
             "last_sql_error": None,
             "correction_history": None,
             "validation_errors": None,
+            "previous_results": previous_results,
+            "is_followup": False,
+            "referenced_ids": None,
         }
         out = self.workflow.invoke(state)
         return out.get("final_answer") or "No answer generated."
     
-    def query_with_structured(self, question: str) -> Dict[str, Any]:
+    def query_with_structured(
+        self, 
+        question: str,
+        previous_results: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
         """
         Query the database and return both answer and structured data.
+        
+        Args:
+            question: User's question
+            previous_results: Optional list of previous query results for follow-up questions
         
         Returns:
             Dict with 'answer' (str) and 'structured_result' (List[Dict] | None)
@@ -1585,9 +1900,14 @@ If date filters exist, ensure you're filtering on the correct table columns.
             "last_sql_error": None,
             "correction_history": None,
             "validation_errors": None,
+            "previous_results": previous_results,
+            "is_followup": False,
+            "referenced_ids": None,
         }
         out = self.workflow.invoke(state)
         return {
             "answer": out.get("final_answer") or "No answer generated.",
-            "structured_result": out.get("structured_result")
+            "structured_result": out.get("structured_result"),
+            "tables_used": out.get("tables"),  # Tables used in the query (for memory context)
+            "sql_query": out.get("sql"),
         }

@@ -74,6 +74,7 @@ async def stream_orchestrator_response(
         # Solution: Manually load checkpoint messages first, then merge with new message
         # This ensures we preserve conversation history
         checkpoint_messages = []
+        checkpoint_query_result_memory = None
         if agent.checkpointer:
             try:
                 # Try to load the latest checkpoint for this thread_id
@@ -96,13 +97,17 @@ async def stream_orchestrator_response(
                     checkpoint = checkpoint_tuple.checkpoint if hasattr(checkpoint_tuple, 'checkpoint') else checkpoint_tuple[1]
                     
                     if isinstance(checkpoint, dict):
-                        # LangGraph checkpoint structure: {channel_values: {messages: [...]}}
+                        # LangGraph checkpoint structure: {channel_values: {messages: [...], query_result_memory: [...]}}
                         channel_values = checkpoint.get("channel_values", {})
                         if channel_values and "messages" in channel_values:
                             checkpoint_messages = list(channel_values["messages"])
                         # Try direct messages field (fallback)
                         elif "messages" in checkpoint:
                             checkpoint_messages = list(checkpoint["messages"])
+                        # Load query_result_memory for follow-up questions (must persist across turns)
+                        if channel_values and "query_result_memory" in channel_values and channel_values["query_result_memory"]:
+                            checkpoint_query_result_memory = channel_values["query_result_memory"]
+                            logger.debug(f"Loaded query_result_memory from checkpoint: {len(checkpoint_query_result_memory)} results")
                     
                     if checkpoint_messages:
                         logger.debug(f"Loaded {len(checkpoint_messages)} messages from checkpoint")
@@ -114,7 +119,7 @@ async def stream_orchestrator_response(
         # Checkpoint messages come first, then new message
         all_messages = checkpoint_messages + [HumanMessage(content=message)]
         
-        # Create initial state with merged messages
+        # Create initial state with merged messages and persisted query_result_memory
         initial_state = {
             "question": message,  # New field
             "next_step": "classify",  # New field
@@ -124,7 +129,8 @@ async def stream_orchestrator_response(
             "rag_result": None,
             "general_result": None,
             "final_answer": None,
-            "final_structured_data": None
+            "final_structured_data": None,
+            "query_result_memory": checkpoint_query_result_memory,  # From checkpoint so follow-ups have previous results
         }
         
         # Track statistics
@@ -301,7 +307,8 @@ async def stream_orchestrator_response(
                 "rag_result": None,
                 "general_result": None,
                 "final_answer": None,
-                "final_structured_data": None
+                "final_structured_data": None,
+                "query_result_memory": None
             }
             
             async for event in fallback_agent.astream_events(fallback_initial_state, version="v1"):

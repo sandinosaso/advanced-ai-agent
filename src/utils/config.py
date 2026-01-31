@@ -117,6 +117,11 @@ class Settings(BaseSettings):
     conversation_db_retry_attempts: int = Field(default=3)
     conversation_db_retry_delay: float = Field(default=0.1)
     
+    # Follow-up Question Memory Configuration
+    query_result_memory_size: int = Field(default=3)  # Keep last N query results for follow-ups
+    followup_detection_enabled: bool = Field(default=True)  # Enable follow-up question detection
+    followup_max_context_tokens: int = Field(default=2000)  # Max tokens for previous results context
+    
     class Config:
         env_file = str(_project_root / ".env")
         env_file_encoding = "utf-8"

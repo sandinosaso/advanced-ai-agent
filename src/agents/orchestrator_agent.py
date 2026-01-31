@@ -56,6 +56,7 @@ class AgentState(TypedDict):
     general_result: str | None  # General LLM response for non-SQL/non-RAG questions
     final_answer: str | None
     final_structured_data: List[Dict[str, Any]] | None  # Structured data for final answer (BFF markdown)
+    query_result_memory: List[Dict[str, Any]] | None  # Memory of recent query results for follow-ups
 
 
 class OrchestratorAgent:
@@ -330,6 +331,9 @@ Respond with ONLY one word: SQL, RAG, or GENERAL"""
     
     def _execute_sql_agent(self, state: AgentState) -> AgentState:
         """Execute SQL agent for database queries"""
+        from datetime import datetime
+        from src.utils.query_memory import QueryResultMemory
+        
         question = state["question"]
         
         # Check if SQL agent is enabled
@@ -351,12 +355,43 @@ Respond with ONLY one word: SQL, RAG, or GENERAL"""
         logger.info(f"Executing SQL agent for: '{question}'")
         
         try:
-            # Get both answer and structured data
-            result = self.sql_agent.query_with_structured(question)
+            # Get previous results from memory for follow-up detection
+            previous_results = state.get("query_result_memory")
+            
+            # Get both answer and structured data, passing previous results
+            result = self.sql_agent.query_with_structured(
+                question=question,
+                previous_results=previous_results
+            )
             state["sql_result"] = result["answer"]
             state["sql_structured_result"] = result.get("structured_result")
             state["messages"].append(AIMessage(content=f"SQL Result: {result['answer']}"))
             state["next_step"] = "finalize"
+            
+            # Store result in memory for future follow-up questions
+            if result.get("structured_result"):
+                # Initialize or load existing memory
+                if previous_results:
+                    memory = QueryResultMemory.from_dict(
+                        previous_results,
+                        max_results=settings.query_result_memory_size
+                    )
+                else:
+                    memory = QueryResultMemory(max_results=settings.query_result_memory_size)
+                
+                # Add new result to memory (with tables_used and sql from SQL agent)
+                memory.add_result(
+                    question=question,
+                    structured_data=result["structured_result"],
+                    sql_query=result.get("sql_query"),
+                    tables_used=result.get("tables_used")
+                )
+                
+                # Store updated memory in state (will be persisted by checkpoint)
+                state["query_result_memory"] = memory.to_dict()
+                
+                logger.info(f"Stored query result in memory: {len(memory)} results total")
+            
         except Exception as e:
             logger.error(f"SQL agent error: {e}")
             state["sql_result"] = f"Error: {str(e)}"
@@ -547,7 +582,8 @@ Respond with ONLY one word: SQL, RAG, or GENERAL"""
             "rag_result": None,
             "general_result": None,
             "final_answer": None,
-            "final_structured_data": None
+            "final_structured_data": None,
+            "query_result_memory": None
         }
         
         # Run workflow

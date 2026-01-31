@@ -77,7 +77,78 @@ class DomainOntology:
         if self.llm is None:
             self.llm = create_llm(temperature=0, max_completion_tokens=settings.max_output_tokens)
         return self.llm
-    
+
+    @staticmethod
+    def _term_to_phrase(term: str) -> str:
+        """Convert registry term key to a short phrase for examples (e.g. action_item -> 'action items')."""
+        return term.replace("_", " ").strip()
+
+    def _get_extraction_task_instructions(self) -> str:
+        """
+        Build task instructions for domain term extraction from the registry only.
+        No hardcoded term names. Compound terms (containing '_') get a strict rule.
+        """
+        terms = self.registry.get("terms", {})
+        known_terms = list(terms.keys())
+        if not known_terms:
+            return "Return ONLY a JSON array of term keys from the known terms list. Match case-insensitively."
+
+        lines = [
+            "Identify which known business terms are explicitly or clearly implied by the question.",
+            "Return ONLY a JSON array of term keys from the known terms list.",
+            "Match terms case-insensitively.",
+        ]
+        compound_terms = [t for t in known_terms if "_" in t]
+        if compound_terms:
+            parts_rule = (
+                "Terms containing '_' are compound concepts (e.g. "
+                + ", ".join(f'"{t}"' for t in compound_terms[:3])
+                + ("..." if len(compound_terms) > 3 else "")
+                + "). Only extract a compound term when the question reflects BOTH parts of the concept "
+                "(e.g. for 'X_y' both X and y must be present or clearly implied). "
+                "If only one part is mentioned, do not include that compound term."
+            )
+            lines.append(parts_rule)
+        if terms:
+            desc_lines = []
+            for term in list(terms.keys())[:8]:
+                desc = terms[term].get("description", "")
+                if desc:
+                    desc_lines.append(f'  * "{term}": {desc}')
+            if desc_lines:
+                lines.append("Term meanings (from registry):")
+                lines.extend(desc_lines)
+        return "\n".join([f"- {line}" if not line.startswith("  ") else line for line in lines])
+
+    def _get_extraction_examples(self) -> str:
+        """
+        Build extraction examples from the registry only.
+        Uses first terms; for compound terms, includes an example where only one part is present.
+        """
+        terms = self.registry.get("terms", {})
+        known_terms = list(terms.keys())
+        if not known_terms:
+            return ""
+
+        examples = []
+        simple_terms = [t for t in known_terms if "_" not in t][:3]
+        for term in simple_terms:
+            phrase = self._term_to_phrase(term)
+            examples.append(f'- "Find {phrase}" → ["{term}"]')
+        if len(known_terms) >= 2 and simple_terms:
+            other = next((t for t in known_terms if t != simple_terms[0]), simple_terms[0])
+            phrase0 = self._term_to_phrase(simple_terms[0])
+            phrase1 = self._term_to_phrase(other)
+            examples.append(f'- "Show {phrase0} with {phrase1}" → ["{simple_terms[0]}", "{other}"]')
+        compound_terms = [t for t in known_terms if "_" in t]
+        for term in compound_terms[:2]:
+            phrase = self._term_to_phrase(term)
+            parts = term.split("_")
+            first_part = parts[0] if parts else ""
+            examples.append(f'- "Find {phrase}" (both concepts present) → ["{term}"]')
+            examples.append(f'- "Find {first_part} only" (one concept; no "{term}") → [] or other terms only')
+        return "\n".join(examples)
+
     def extract_domain_terms(self, question: str) -> List[str]:
         """
         Extract domain-specific business terms from natural language question.
@@ -104,14 +175,9 @@ class DomainOntology:
         if not known_terms:
             logger.debug("No terms in domain registry, skipping extraction")
             return []
-        
-        # Generate dynamic examples from the first 3 terms in the registry (avoid overfitting)
-        example_terms = known_terms[:3]
-        examples = "\n".join([
-            f'- "Find {term}s" → ["{term}"]' for term in example_terms
-        ])
-        if len(known_terms) >= 2:
-            examples += f'\n- "Show me {example_terms[0]}s with {example_terms[1]}s" → ["{example_terms[0]}", "{example_terms[1]}"]'
+
+        task_instructions = self._get_extraction_task_instructions()
+        examples = self._get_extraction_examples()
         
         prompt = f"""Extract domain-specific business terms from this question.
 
@@ -121,20 +187,10 @@ Known business terms (from domain vocabulary):
 Question: {question}
 
 Task:
-- Identify which known business terms appear in the question (exact or semantic matches)
-- Also identify synonyms or related terms:
-  * "questions", "answers", "findings", "responses" → "inspection_questions" (if inspection context)
-  * "questions", "answers" → "safety_questions" (if safety context)
-  * "questions", "answers" → "service_questions" (if service context)
-  * "crane", "cranes", "lifting equipment" → "crane"
-  * "action item", "action items", "corrective actions" → "action_item"
-- Return ONLY a JSON array of term keys from the known terms list
-- Match terms case-insensitively (e.g., "Crane", "crane", "CRANE" all match "crane")
+{task_instructions}
 
-Examples (auto-generated from registry):
+Examples (generated from registry):
 {examples}
-- "Find inspection questions" → ["inspection_questions"]
-- "Show me crane inspections with questions" → ["crane", "inspection_questions"]
 
 CRITICAL: Return ONLY the raw JSON array with no markdown formatting.
 Do NOT wrap in ```json``` code blocks.
