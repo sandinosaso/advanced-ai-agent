@@ -91,27 +91,7 @@
         }
       }
     },
-    "failed_inspection": {
-      "entity": "inspection",
-      "description": "Inspections that did not pass or have critical findings",
-      "resolution": {
-        "primary": {
-          "table": "inspectionCertificationStatusOption",
-          "column": "name",
-          "match_type": "semantic",
-          "confidence": 0.8,
-          "note": "Look for status like 'Failed', 'Rejected', 'Not Approved'"
-        },
-        "secondary": {
-          "table": "inspectionQuestionAnswer",
-          "column": "isActionItem",
-          "match_type": "boolean",
-          "value": true,
-          "confidence": 0.7,
-          "note": "Failed inspections often have action items"
-        }
-      }
-    },
+
     "truck": {
       "entity": "asset",
       "description": "Commercial vehicles used for transportation",
@@ -181,6 +161,42 @@
           "column": "name",
           "match_type": "text_search",
           "confidence": 0.5
+        }
+      }
+    },
+    "inspection_questions": {
+      "entity": "inspection_detail",
+      "description": "Questions and answers from inspection forms, including findings and responses",
+      "resolution": {
+        "primary": {
+          "tables": ["inspectionQuestion", "inspectionQuestionAnswer"],
+          "match_type": "structural",
+          "confidence": 0.95,
+          "note": "Always include both tables together - they form a parent-child relationship"
+        }
+      }
+    },
+    "safety_questions": {
+      "entity": "safety_detail",
+      "description": "Questions and answers from safety forms and assessments",
+      "resolution": {
+        "primary": {
+          "tables": ["safetyQuestion", "safetyQuestionAnswer"],
+          "match_type": "structural",
+          "confidence": 0.95,
+          "note": "Always include both tables together - they form a parent-child relationship"
+        }
+      }
+    },
+    "service_questions": {
+      "entity": "service_detail",
+      "description": "Questions and answers from service forms and checklists",
+      "resolution": {
+        "primary": {
+          "tables": ["serviceQuestion", "serviceQuestionAnswer"],
+          "match_type": "structural",
+          "confidence": 0.95,
+          "note": "Always include both tables together - they form a parent-child relationship"
         }
       }
     }

@@ -7,7 +7,7 @@ Tests the domain vocabulary registry and term resolution logic.
 import json
 import pytest
 from pathlib import Path
-from src.utils.domain_ontology import DomainOntology, format_domain_context, build_where_clauses
+from src.utils.domain_ontology import DomainOntology, format_domain_context, format_domain_context_for_table_selection, build_where_clauses
 
 
 @pytest.fixture

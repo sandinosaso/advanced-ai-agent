@@ -15,7 +15,7 @@ from langgraph.graph import StateGraph, END
 from src.utils.config import settings, create_llm
 from src.utils.logger import logger
 from src.utils.path_finder import JoinPathFinder
-from src.utils.domain_ontology import DomainOntology, format_domain_context, build_where_clauses
+from src.utils.domain_ontology import DomainOntology, format_domain_context, format_domain_context_for_table_selection, build_where_clauses
 from src.tools.sql_tool import sql_tool
 from src.utils.sql.secure_views import (
     rewrite_secure_tables,
@@ -248,13 +248,13 @@ class SQLGraphAgent:
         """
         all_tables = list(self.join_graph["tables"].keys())
         
-        # Build domain context if available
+        # Build domain context if available (lightweight version for table selection)
         domain_context = ""
         domain_required_tables = set()
         
         domain_resolutions = state.get('domain_resolutions', [])
         if domain_resolutions:
-            domain_context = "\n" + format_domain_context(domain_resolutions) + "\n"
+            domain_context = "\n" + format_domain_context_for_table_selection(domain_resolutions) + "\n"
             
             # Collect tables required by domain resolutions
             for res in domain_resolutions:
@@ -647,22 +647,44 @@ Return ONLY the SQL query, nothing else.
         Remove duplicate JOIN clauses from SQL.
         
         Safety net for LLM errors that create duplicate joins.
+        Detects both:
+        1. Exact duplicate JOIN lines
+        2. Same table joined multiple times (even with different conditions)
         """
         lines = sql.split('\n')
-        seen_joins = set()
+        seen_joins = set()  # For exact duplicates
+        seen_tables = set()  # For duplicate table joins
         deduplicated_lines = []
         
         for line in lines:
             # Normalize JOIN line for comparison (remove extra spaces)
             normalized = ' '.join(line.strip().split())
+            normalized_upper = normalized.upper()
             
             # Check if this is a JOIN line
-            if normalized.upper().startswith('JOIN '):
-                if normalized not in seen_joins:
+            if normalized_upper.startswith('JOIN '):
+                # Extract table name from JOIN clause
+                # Format: "JOIN table_name ON ..." or "JOIN table_name alias ON ..."
+                parts = normalized.split()
+                if len(parts) >= 2:
+                    table_name = parts[1].lower()  # Get table name after JOIN keyword
+                    
+                    # Check for exact duplicate
+                    if normalized in seen_joins:
+                        logger.warning(f"Removed exact duplicate JOIN: {normalized}")
+                        continue
+                    
+                    # Check for duplicate table (same table joined twice with different conditions)
+                    if table_name in seen_tables:
+                        logger.warning(f"Removed duplicate table JOIN: {table_name} (already joined)")
+                        continue
+                    
                     seen_joins.add(normalized)
+                    seen_tables.add(table_name)
                     deduplicated_lines.append(line)
                 else:
-                    logger.info(f"Removed duplicate JOIN: {normalized}")
+                    # Malformed JOIN, keep it (will fail validation)
+                    deduplicated_lines.append(line)
             else:
                 deduplicated_lines.append(line)
         
@@ -1039,8 +1061,38 @@ Return ONLY the SQL query, nothing else.
         
         # Detect specific error types for targeted instructions
         is_group_by_error = "GROUP BY" in error_message.upper() or "not in GROUP BY" in error_message.upper() or "only_full_group_by" in error_message.lower()
+        is_duplicate_table_error = "Not unique table/alias" in error_message or "1066" in error_message
         
         group_by_instructions = ""
+        duplicate_table_instructions = ""
+        
+        if is_duplicate_table_error:
+            duplicate_table_instructions = """
+CRITICAL: DUPLICATE TABLE/ALIAS ERROR DETECTED
+
+The error "Not unique table/alias" means you are joining the same table multiple times.
+
+COMMON CAUSES:
+1. Same table joined twice with different conditions:
+   BAD:
+   JOIN workOrder ON workOrder.customerId = customer.id
+   JOIN workOrder ON workOrder.customerLocationId = customerLocation.id
+   
+   GOOD (pick the most direct path):
+   JOIN workOrder ON workOrder.customerLocationId = customerLocation.id
+
+2. Trying to use multiple join paths to the same table:
+   - Choose the SHORTEST path with HIGHEST confidence
+   - Use inspectionTemplateWorkOrder.workOrderId = workOrder.id (direct FK, conf: 1.0)
+   - NOT customerLocation → customer → workOrder (indirect, longer path)
+
+FIX STRATEGY:
+- Identify which table appears in multiple JOIN clauses
+- Keep ONLY the most direct join (fewest hops, highest confidence)
+- Remove all other joins to that table
+- If you need multiple conditions, combine them in the WHERE clause instead
+"""
+        
         if is_group_by_error:
             # Extract the problematic expression from error message if possible
             import re
@@ -1099,7 +1151,8 @@ INSTRUCTIONS:
    - Using the correct table name for each column
    - Ensuring all columns exist in their respective tables
    - Fixing any join conditions that reference wrong columns
-{group_by_instructions}
+   - If same table appears in multiple JOINs, keep only the most direct path
+{duplicate_table_instructions}{group_by_instructions}
 4. Return ONLY the corrected SQL query, nothing else
 5. Do NOT add comments or explanations
 

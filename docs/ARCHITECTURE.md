@@ -75,7 +75,9 @@ graph TB
     Classify -->|System Usage| RAGAgent[RAG Agent]
     Classify -->|General Question| GeneralAgent[General Agent]
     
-    SQLAgent --> TableSelector[Table Selector]
+    SQLAgent --> DomainOntology[Domain Ontology<br/>Extract Business Terms]
+    DomainOntology --> DomainRegistry[(Domain Registry<br/>domain_registry.json)]
+    DomainOntology --> TableSelector[Table Selector]
     TableSelector --> PathFinder[Path Finder<br/>Dijkstra Algorithm]
     PathFinder --> JoinPlanner[Join Planner]
     JoinPlanner --> SQLGen[SQL Generator]
@@ -101,6 +103,8 @@ graph TB
     style VectorStore fill:#9B59B6
     style LLM fill:#3498DB
     style Checkpoint fill:#50C878
+    style DomainOntology fill:#FFA700
+    style DomainRegistry fill:#FFA700
 ```
 
 ## Core Agents
@@ -163,11 +167,12 @@ Advanced SQL agent that uses graph algorithms to discover optimal join paths.
 **Workflow**:
 ```mermaid
 graph TB
-    A[Question] --> B[Table Selector]
+    A[Question] --> A1[Domain Ontology<br/>Extract & Resolve Terms]
+    A1 --> B[Table Selector<br/>with Domain Context]
     B --> C[Filter Relationships]
     C --> D[Path Finder<br/>Dijkstra]
     D --> E[Join Planner]
-    E --> F[SQL Generator]
+    E --> F[SQL Generator<br/>with Domain Filters]
     F --> G[Secure Rewriter]
     G --> H[Pre-Validation]
     H -->|Valid| I[Executor]
@@ -179,6 +184,7 @@ graph TB
     
     note1["<small>⚠️ On error, SQL Graph Agent<br/>calls Correction Agent<br/>to auto-fix query</small>"] -.-> J
     
+    A2["<small>DOMAIN_EXTRACTION_ENABLED<br/>DOMAIN_REGISTRY_PATH</small>"] -.-> A1
     B2["<small>SQL_MAX_TABLES_IN_SELECTION_PROMPT</small>"] -.-> B
     C2["<small>SQL_CONFIDENCE_THRESHOLD<br/>SQL_MAX_RELATIONSHIPS_DISPLAY</small>"] -.-> C
     D2["<small>SQL_CONFIDENCE_THRESHOLD<br/>SQL_MAX_SUGGESTED_PATHS</small>"] -.-> D
@@ -188,10 +194,11 @@ graph TB
     I2["<small>MAX_QUERY_ROWS</small>"] -.-> I
     J2["<small>SQL_CORRECTION_MAX_ATTEMPTS<br/>SQL_MAX_COLUMNS_IN_CORRECTION<br/>SQL_MAX_RELATIONSHIPS_IN_PROMPT<br/>SQL_MAX_SQL_HISTORY_LENGTH</small>"] -.-> J
     
-    style D fill:#FFA500
+    style A1 fill:#FFA700
     style G fill:#FF6B6B
     style H fill:#4A90E2
     style J fill:#FF1493
+    style A2 fill:#F5F5F5
     style B2 fill:#F5F5F5
     style C2 fill:#F5F5F5
     style D2 fill:#F5F5F5
@@ -230,6 +237,248 @@ class SQLGraphState(TypedDict):
     correction_history: Optional[List[Dict]]
     validation_errors: Optional[List[str]]
 ```
+
+### Domain Ontology System
+
+The Domain Ontology system bridges the gap between business terminology and database schema, enabling natural language queries to be accurately mapped to SQL constructs.
+
+**Location**: `src/utils/domain_ontology.py`, `artifacts/domain_registry.json`
+
+**Purpose**: Maps business concepts (like "crane", "action item", "inspection questions") to specific database tables, columns, and filter conditions.
+
+#### Architecture
+
+```mermaid
+graph TB
+    Question[User Question] --> Extract[Extract Domain Terms<br/>LLM identifies business concepts]
+    Extract --> Registry[(Domain Registry<br/>domain_registry.json)]
+    Registry --> Resolve[Resolve Terms<br/>Map to schema locations]
+    Resolve --> Context[Domain Context]
+    
+    Context --> TableSelection[Table Selection<br/>Include required tables]
+    Context --> SQLGen[SQL Generation<br/>Apply filters]
+    
+    TableSelection --> SQL[Generated SQL]
+    SQLGen --> SQL
+    
+    style Extract fill:#FFA700
+    style Registry fill:#AAA700
+    style Resolve fill:#FFA700
+    style Context fill:#FFE4B5
+```
+
+#### Domain Registry Structure
+
+The domain registry (`artifacts/domain_registry.json`) contains mappings for business terms:
+
+```json
+{
+  "version": 1,
+  "terms": {
+    "crane": {
+      "entity": "asset",
+      "description": "Heavy lifting equipment",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        }
+      }
+    },
+    "action_item": {
+      "entity": "inspection_finding",
+      "resolution": {
+        "primary": {
+          "table": "inspectionQuestionAnswer",
+          "column": "isActionItem",
+          "match_type": "boolean",
+          "value": true,
+          "confidence": 1.0
+        }
+      }
+    },
+    "inspection_questions": {
+      "entity": "inspection_detail",
+      "resolution": {
+        "primary": {
+          "tables": ["inspectionQuestion", "inspectionQuestionAnswer"],
+          "match_type": "structural",
+          "confidence": 0.95
+        }
+      }
+    }
+  }
+}
+```
+
+#### Resolution Strategies
+
+The system supports multiple resolution strategies with fallback mechanisms:
+
+1. **Primary Resolution** (highest confidence)
+   - Direct table/column mapping
+   - Used first when resolving terms
+
+2. **Secondary Resolution** (medium confidence)
+   - Alternative schema locations
+   - Used if primary resolution doesn't fit context
+
+3. **Fallback Resolution** (lowest confidence)
+   - Generic search across related tables
+   - Last resort for ambiguous terms
+
+#### Match Types
+
+Different match types handle various query patterns:
+
+**Text Search** (`text_search`, `semantic`):
+- Searches text columns using case-insensitive LIKE
+- Example: "crane" → `LOWER(asset.name) LIKE '%crane%'`
+- Supports multiple columns (OR'd together)
+
+**Boolean Filter** (`boolean`):
+- Exact boolean column matches
+- Example: "action item" → `inspectionQuestionAnswer.isActionItem = true`
+
+**Structural Grouping** (`structural`):
+- Groups related tables together without filters
+- Example: "inspection questions" → includes both `inspectionQuestion` and `inspectionQuestionAnswer`
+- Used for parent-child table relationships
+
+**Exact Match** (`exact`):
+- Exact value matching
+- Example: specific status codes or enum values
+
+#### Workflow Integration
+
+**Step 1: Term Extraction**
+```python
+# LLM extracts business terms from question
+question = "Find cranes with action items"
+terms = ontology.extract_domain_terms(question)
+# Returns: ["crane", "action_item"]
+```
+
+**Step 2: Term Resolution**
+```python
+# Resolve each term to schema locations
+resolutions = []
+for term in terms:
+    resolution = ontology.resolve_domain_term(term)
+    resolutions.append(resolution)
+
+# Returns:
+# [
+#   DomainResolution(
+#     term="crane",
+#     tables=["asset", "assetType"],
+#     filters=[{"table": "asset", "column": "name", "operator": "LIKE", ...}],
+#     confidence=0.95
+#   ),
+#   DomainResolution(
+#     term="action_item",
+#     tables=["inspectionQuestionAnswer"],
+#     filters=[{"table": "inspectionQuestionAnswer", "column": "isActionItem", ...}],
+#     confidence=1.0
+#   )
+# ]
+```
+
+**Step 3: Table Selection Enhancement**
+```python
+# Inject domain context into table selection prompt
+context = format_domain_context_for_table_selection(resolutions)
+# Shows required tables for business concepts
+# Helps LLM select correct tables
+```
+
+**Step 4: SQL Generation Enhancement**
+```python
+# Inject domain filters into SQL generation
+context = format_domain_context(resolutions)
+where_clauses = build_where_clauses(resolutions)
+
+# Generated SQL includes:
+# - Proper table joins (from domain.tables)
+# - Business logic filters (from domain.filters)
+# - Case-insensitive matching where appropriate
+```
+
+#### Benefits
+
+1. **Semantic Understanding**: Translates business language to database schema
+2. **Consistent Mapping**: Same term always resolves to same schema location
+3. **Multi-Strategy Resolution**: Fallback mechanisms handle ambiguity
+4. **Case-Insensitive Search**: Handles "Crane", "crane", "CRANE" uniformly
+5. **Extensible**: New business terms added via JSON (no code changes)
+6. **Confidence Scoring**: Tracks resolution reliability
+7. **Structural Awareness**: Understands parent-child table relationships
+
+#### Configuration
+
+**Environment Variables**:
+```bash
+DOMAIN_REGISTRY_PATH=artifacts/domain_registry.json  # Registry location
+DOMAIN_EXTRACTION_ENABLED=true                        # Enable/disable extraction
+```
+
+**Location**: `src/utils/config.py`
+
+#### Example Queries
+
+**Query**: "Show me cranes with action items"
+
+**Domain Extraction**:
+- Terms: `["crane", "action_item"]`
+
+**Resolution**:
+- `crane` → `asset` table, text search on name/manufacturer/model
+- `action_item` → `inspectionQuestionAnswer.isActionItem = true`
+
+**Generated SQL**:
+```sql
+SELECT a.*, iqa.*
+FROM asset a
+JOIN inspection i ON i.assetId = a.id
+JOIN inspectionQuestionAnswer iqa ON iqa.inspectionId = i.id
+WHERE LOWER(a.name) LIKE '%crane%'
+  AND iqa.isActionItem = true
+```
+
+**Query**: "Find inspection questions for forklifts"
+
+**Domain Extraction**:
+- Terms: `["inspection_questions", "forklift"]`
+
+**Resolution**:
+- `inspection_questions` → structural grouping of `inspectionQuestion` + `inspectionQuestionAnswer`
+- `forklift` → `asset` table, text search
+
+**Generated SQL**:
+```sql
+SELECT iq.*, iqa.*, a.name
+FROM inspectionQuestion iq
+JOIN inspectionQuestionAnswer iqa ON iqa.questionId = iq.id
+JOIN inspection i ON i.id = iq.inspectionId
+JOIN asset a ON a.id = i.assetId
+WHERE LOWER(a.name) LIKE '%forklift%'
+```
+
+#### Future Enhancements
+
+1. **Synonym Detection**: Automatically detect synonyms (e.g., "corrective action" = "action item")
+2. **Unresolved Term Logging**: Track terms users mention but aren't in registry
+3. **Dynamic Registry Updates**: Admin UI to add new terms without redeployment
+4. **Context-Aware Resolution**: Choose resolution strategy based on query context
+5. **Embedding-Based Matching**: Use semantic similarity for fuzzy term matching
 
 ### 3. RAG Agent
 
@@ -546,6 +795,7 @@ sequenceDiagram
     participant User
     participant Orchestrator
     participant SQLAgent
+    participant DomainOntology
     participant PathFinder
     participant SQLGen
     participant Rewriter
@@ -553,15 +803,19 @@ sequenceDiagram
     participant Corrector
     participant MySQL
     
-    User->>Orchestrator: "Show employees who worked >20h"
+    User->>Orchestrator: "Show cranes with action items"
     Orchestrator->>SQLAgent: Route to SQL
-    SQLAgent->>SQLAgent: Select tables: [employee, workTime]
-    SQLAgent->>PathFinder: Find path employee → workTime
-    PathFinder-->>SQLAgent: Direct relationship
-    SQLAgent->>SQLGen: Generate SQL with joins
-    SQLGen-->>SQLAgent: SELECT e.* FROM employee e...
+    SQLAgent->>DomainOntology: Extract domain terms
+    DomainOntology-->>SQLAgent: ["crane", "action_item"]
+    SQLAgent->>DomainOntology: Resolve terms to schema
+    DomainOntology-->>SQLAgent: Tables + Filters
+    SQLAgent->>SQLAgent: Select tables with domain context
+    SQLAgent->>PathFinder: Find join paths
+    PathFinder-->>SQLAgent: Optimal paths
+    SQLAgent->>SQLGen: Generate SQL with domain filters
+    SQLGen-->>SQLAgent: SELECT ... WHERE crane filter AND action_item filter
     SQLAgent->>Rewriter: Rewrite secure tables
-    Rewriter-->>SQLAgent: SELECT e.* FROM secure_employee e...
+    Rewriter-->>SQLAgent: SELECT ... FROM secure_* tables
     SQLAgent->>Validator: Pre-validate SQL
     
     alt Validation Passes
@@ -587,7 +841,7 @@ sequenceDiagram
         MySQL-->>SQLAgent: Results
     end
     
-    SQLAgent-->>Orchestrator: "10 employees worked >20h"
+    SQLAgent-->>Orchestrator: "5 cranes have action items"
     Orchestrator-->>User: Final answer
 ```
 
@@ -656,6 +910,14 @@ DB_ENCRYPT_KEY=your_encryption_key_here
 OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_TEMPERATURE=0.1
+```
+
+#### Domain Ontology Settings
+
+```bash
+# Domain vocabulary mapping
+DOMAIN_REGISTRY_PATH=artifacts/domain_registry.json  # Path to domain registry
+DOMAIN_EXTRACTION_ENABLED=true                        # Enable domain term extraction
 ```
 
 #### SQL Agent Core Settings
@@ -836,6 +1098,7 @@ graph LR
 | **API** | FastAPI | Internal service |
 | **Streaming** | Server-Sent Events | Real-time responses |
 | **Path Finding** | Dijkstra Algorithm | Join path discovery |
+| **Domain Ontology** | JSON Registry + LLM | Business term to schema mapping |
 
 ## Key Design Decisions
 
@@ -878,6 +1141,14 @@ graph LR
 **How**: Pre-execution validation + focused correction agent with iterative retry.
 
 **Benefit**: Self-healing SQL generation, reduces manual intervention, improves reliability.
+
+### 6. Domain Ontology Mapping
+
+**Why**: Users speak in business terms ("crane", "action item") but databases use technical schema (tables, columns, joins).
+
+**How**: JSON registry maps business concepts to schema locations with multiple resolution strategies and confidence scoring.
+
+**Benefit**: Natural language understanding, consistent term resolution, extensible without code changes, handles ambiguity gracefully.
 
 ## Conversation Memory
 

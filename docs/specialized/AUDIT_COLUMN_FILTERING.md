@@ -220,6 +220,27 @@ examples = [f'"Find {term}s" → ["{term}"]' for term in example_terms]
 
 This prevents overfitting to specific terms and ensures the system works generically for all domain terms, including new ones like "bulbasaur".
 
+### 3. Enhanced Duplicate Join Detection
+The `_deduplicate_joins` method now detects both exact duplicates AND same table joined multiple times:
+
+**Problem**:
+```sql
+JOIN secure_workorder ON secure_workorder.customerId = secure_customer.id
+JOIN secure_workorder ON secure_workorder.customerLocationId = secure_customerlocation.id
+-- Error: Not unique table/alias 'secure_workorder'
+```
+
+**Solution**:
+- Track both exact JOIN lines AND table names
+- Remove duplicate table joins (keeps first occurrence)
+- Log warnings for removed duplicates
+
+### 4. Correction Agent Instructions
+Added specific instructions for "Not unique table/alias" errors:
+- Identifies when same table is joined multiple times
+- Instructs LLM to keep only the most direct path
+- Suggests using WHERE clause for multiple conditions instead
+
 ## Related Files
 
 - [`api-ai-agent/src/agents/sql_graph_agent.py`](api-ai-agent/src/agents/sql_graph_agent.py) - Main implementation

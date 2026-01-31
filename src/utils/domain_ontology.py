@@ -122,12 +122,19 @@ Question: {question}
 
 Task:
 - Identify which known business terms appear in the question (exact or semantic matches)
-- Also identify synonyms or related terms
+- Also identify synonyms or related terms:
+  * "questions", "answers", "findings", "responses" → "inspection_questions" (if inspection context)
+  * "questions", "answers" → "safety_questions" (if safety context)
+  * "questions", "answers" → "service_questions" (if service context)
+  * "crane", "cranes", "lifting equipment" → "crane"
+  * "action item", "action items", "corrective actions" → "action_item"
 - Return ONLY a JSON array of term keys from the known terms list
 - Match terms case-insensitively (e.g., "Crane", "crane", "CRANE" all match "crane")
 
 Examples (auto-generated from registry):
 {examples}
+- "Find inspection questions" → ["inspection_questions"]
+- "Show me crane inspections with questions" → ["crane", "inspection_questions"]
 
 CRITICAL: Return ONLY the raw JSON array with no markdown formatting.
 Do NOT wrap in ```json``` code blocks.
@@ -245,7 +252,12 @@ Just return: ["term1", "term2"]"""
         # Build filter(s)
         match_type = strategy_config.get("match_type", "exact")
         
-        if match_type == "boolean":
+        if match_type == "structural":
+            # Structural match - just table grouping, no filters needed
+            # Used for related tables that should be included together
+            # (e.g., inspectionQuestion + inspectionQuestionAnswer)
+            pass  # No filters to add
+        elif match_type == "boolean":
             # Boolean filter (e.g., isActionItem = true)
             filters.append({
                 "table": strategy_config["table"],
@@ -325,12 +337,40 @@ Just return: ["term1", "term2"]"""
         # 4. New terms are added to domain_registry.json
 
 
+def format_domain_context_for_table_selection(resolutions: List[Dict[str, Any]]) -> str:
+    """
+    Format domain resolutions for table selection prompt (tables only, no filters).
+    
+    This lightweight version only shows required tables to avoid token bloat.
+    Filters are injected later in SQL generation where they're actually used.
+    
+    Args:
+        resolutions: List of resolved domain terms (as dicts)
+        
+    Returns:
+        Formatted string for table selection prompt
+    """
+    if not resolutions:
+        return ""
+    
+    lines = ["Domain Context (business concepts mapped to schema):"]
+    lines.append("=" * 70)
+    
+    for res in resolutions:
+        lines.append(f"\nConcept: '{res['term']}' ({res['entity']})")
+        lines.append(f"  Tables needed: {', '.join(res['tables'])}")
+        lines.append(f"  Confidence: {res['confidence']} (strategy: {res['strategy']})")
+    
+    lines.append("=" * 70)
+    return "\n".join(lines)
+
+
 def format_domain_context(resolutions: List[Dict[str, Any]]) -> str:
     """
     Format domain resolutions into human-readable context for prompts.
     
-    Used to inject domain understanding into table selection, join planning,
-    and SQL generation prompts.
+    Used to inject domain understanding into join planning and SQL generation prompts.
+    Includes both tables and filters.
     
     Args:
         resolutions: List of resolved domain terms (as dicts)
@@ -347,18 +387,24 @@ def format_domain_context(resolutions: List[Dict[str, Any]]) -> str:
     for res in resolutions:
         lines.append(f"\nConcept: '{res['term']}' ({res['entity']})")
         lines.append(f"  Tables needed: {', '.join(res['tables'])}")
-        lines.append(f"  Filters to apply:")
-        for f in res['filters']:
-            # Show LOWER() wrapper if case-insensitive
-            if f.get("case_insensitive"):
-                column_ref = f"LOWER({f['table']}.{f['column']})"
-            else:
-                column_ref = f"{f['table']}.{f['column']}"
-            
-            if f.get("match_type") == "boolean":
-                lines.append(f"    - {column_ref} {f['operator']} {f['value']}")
-            else:
-                lines.append(f"    - {column_ref} {f['operator']} '{f['value']}'")
+        
+        # Only show filters if they exist (structural matches have no filters)
+        if res['filters']:
+            lines.append(f"  Filters to apply:")
+            for f in res['filters']:
+                # Show LOWER() wrapper if case-insensitive
+                if f.get("case_insensitive"):
+                    column_ref = f"LOWER({f['table']}.{f['column']})"
+                else:
+                    column_ref = f"{f['table']}.{f['column']}"
+                
+                if f.get("match_type") == "boolean":
+                    lines.append(f"    - {column_ref} {f['operator']} {f['value']}")
+                else:
+                    lines.append(f"    - {column_ref} {f['operator']} '{f['value']}'")
+        else:
+            lines.append(f"  Note: Structural grouping (no filters needed)")
+        
         lines.append(f"  Confidence: {res['confidence']} (strategy: {res['strategy']})")
     
     lines.append("=" * 70)
