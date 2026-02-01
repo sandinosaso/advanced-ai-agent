@@ -22,8 +22,8 @@ from typing import Dict, Any, List, Tuple
 from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
-from src.models.database import get_database
-from src.utils.config import settings
+from src.infra.database import get_database
+from src.config.settings import settings
 
 
 RAW_PATH = os.path.join("artifacts", "join_graph_raw.json")

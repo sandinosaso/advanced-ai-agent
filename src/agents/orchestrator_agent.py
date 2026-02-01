@@ -17,7 +17,8 @@ from loguru import logger
 
 from src.agents.sql_graph_agent import SQLGraphAgent
 from src.agents.rag_agent import RAGAgent
-from src.utils.config import settings, create_llm
+from src.config.settings import settings
+from src.llm.client import create_llm
 
 # Module-level agent instance (reused across requests)
 _shared_agent: Optional['OrchestratorAgent'] = None

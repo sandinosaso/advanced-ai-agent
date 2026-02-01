@@ -21,8 +21,9 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.utils.domain_ontology import DomainOntology, build_where_clauses
-from src.utils.config import settings
+from src.domain.ontology import DomainOntology
+from src.domain.ontology.formatter import build_where_clauses
+from src.config.settings import settings
 
 
 def test_domain_ontology_basic():

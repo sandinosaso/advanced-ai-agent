@@ -13,7 +13,7 @@ import sys
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.utils.query_memory import QueryResultMemory, QueryResult
+from src.memory.query_memory import QueryResultMemory, QueryResult
 
 
 def test_query_result_creation():

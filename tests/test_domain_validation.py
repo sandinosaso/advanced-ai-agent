@@ -20,9 +20,9 @@ def validate_implementation():
     errors = []
     warnings = []
     
-    # Test 1: Check domain_ontology.py exists
-    print("\n1. Checking domain_ontology.py...")
-    ontology_file = project_root / "src" / "utils" / "domain_ontology.py"
+    # Test 1: Check domain_ontology exists
+    print("\n1. Checking domain ontology module...")
+    ontology_file = project_root / "src" / "domain" / "ontology" / "__init__.py"
     if ontology_file.exists():
         content = ontology_file.read_text()
         # Check for key components

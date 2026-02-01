@@ -12,12 +12,14 @@ from typing import TypedDict, List, Dict, Any, Optional, Set
 
 from langgraph.graph import StateGraph, END
 
-from src.utils.config import settings, create_llm
-from src.utils.logger import logger
-from src.utils.path_finder import JoinPathFinder
-from src.utils.domain_ontology import DomainOntology, format_domain_context, format_domain_context_for_table_selection, build_where_clauses
-from src.tools.sql_tool import sql_tool
-from src.utils.sql.secure_views import (
+from src.config.settings import settings
+from src.llm.client import create_llm
+from src.utils.logging import logger
+from src.sql.graph.path_finder import JoinPathFinder
+from src.domain.ontology import DomainOntology
+from src.domain.ontology.formatter import format_domain_context, format_domain_context_for_table_selection, build_where_clauses
+from src.sql.execution.executor import sql_tool
+from src.sql.execution.secure_rewriter import (
     rewrite_secure_tables,
     from_secure_view
 )
@@ -27,9 +29,7 @@ from src.utils.sql.secure_views import (
 _project_root = Path(__file__).parent.parent.parent
 JOIN_GRAPH_PATH = _project_root / "artifacts" / "join_graph_merged.json"
 
-# Audit columns to exclude from join planning
-# These columns are for tracking metadata, not for establishing semantic relationships
-AUDIT_COLUMNS = {'createdBy', 'updatedBy', 'createdAt', 'updatedAt'}
+from src.config.constants import AUDIT_COLUMNS
 
 
 def _entity_to_id_field(entity: str) -> Optional[str]:

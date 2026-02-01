@@ -15,10 +15,10 @@ from loguru import logger
 import asyncio
 
 from src.api.routes import chat
-from src.api.models import HealthResponse
-from src.models.conversation_db import get_conversation_db
-from src.utils.config import settings
-from src.utils.rag.vector_store import VectorStore
+from src.api.schemas.chat import HealthResponse
+from src.memory.conversation_store import get_conversation_db
+from src.config.settings import settings
+from src.infra.vector_store import VectorStore
 
 
 @asynccontextmanager

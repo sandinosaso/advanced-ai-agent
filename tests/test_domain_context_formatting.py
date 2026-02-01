@@ -8,10 +8,10 @@ Verifies:
 """
 
 import unittest
-from src.utils.domain_ontology import (
+from src.domain.ontology import DomainOntology
+from src.domain.ontology.formatter import (
     format_domain_context_for_table_selection,
-    format_domain_context,
-    DomainOntology
+    format_domain_context
 )
 
 

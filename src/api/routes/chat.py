@@ -10,9 +10,9 @@ from fastapi.responses import StreamingResponse
 from typing import AsyncGenerator
 from loguru import logger
 
-from src.api.models import ChatStreamRequest, StreamEvent
+from src.api.schemas.chat import ChatStreamRequest, StreamEvent
 from src.agents.orchestrator_agent import get_orchestrator_agent
-from src.models.conversation_db import get_conversation_db
+from src.memory.conversation_store import get_conversation_db
 from langchain_core.messages import HumanMessage
 import asyncio
 

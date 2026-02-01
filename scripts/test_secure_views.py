@@ -9,8 +9,7 @@ This validates:
 """
 
 import sys
-from src.utils.sql.secure_views import (
-    SECURE_VIEW_MAP,
+from src.sql.execution.secure_rewriter import (
     is_secure_table,
     to_secure_view,
     rewrite_secure_tables,
@@ -18,6 +17,7 @@ from src.utils.sql.secure_views import (
     validate_tables_exist,
     log_secure_view_config
 )
+from src.config.constants import SECURE_VIEW_MAP
 
 def test_secure_view_map():
     """Test SECURE_VIEW_MAP structure"""

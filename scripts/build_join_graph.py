@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Tuple, Any
 from sqlalchemy import inspect
-from src.models.database import get_database
+from src.infra.database import get_database
 
 
 OUTPUT_PATH = os.path.join("artifacts", "join_graph_raw.json")

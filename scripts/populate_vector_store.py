@@ -26,8 +26,8 @@ from src.utils.rag.chunking_strategies import (
     DocumentStructureChunking,
     RecursiveChunking
 )
-from src.utils.rag.embedding_service import EmbeddingService
-from src.utils.rag.vector_store import VectorStore
+from src.llm.embeddings import EmbeddingService
+from src.infra.vector_store import VectorStore
 
 
 def get_project_root() -> Path:

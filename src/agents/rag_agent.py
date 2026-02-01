@@ -10,9 +10,10 @@ from dataclasses import dataclass
 from langchain_core.messages import HumanMessage
 from loguru import logger
 
-from src.utils.rag.vector_store import VectorStore, SearchResult
-from src.utils.rag.embedding_service import EmbeddingService
-from src.utils.config import create_llm, settings
+from src.infra.vector_store import VectorStore, SearchResult
+from src.llm.embeddings import EmbeddingService
+from src.llm.client import create_llm
+from src.config.settings import settings
 
 
 @dataclass
