@@ -1,5 +1,5 @@
 """
-RAG Agent for Phase 3 - Answer generation from retrieved chunks
+RAG Agent - Answer generation from retrieved chunks
 
 Retrieves relevant chunks from vector store and generates natural language answers.
 """
@@ -11,9 +11,9 @@ from langchain_core.messages import HumanMessage
 from loguru import logger
 
 from src.infra.vector_store import VectorStore, SearchResult
-from src.llm.embeddings import EmbeddingService
 from src.llm.client import create_llm
 from src.config.settings import settings
+from src.agents.rag.prompts import build_rag_prompt
 
 
 @dataclass
@@ -29,14 +29,14 @@ class RAGResponse:
 class RAGAgent:
     """
     Retrieval-Augmented Generation agent
-    
+
     Answers questions by:
     1. Retrieving relevant chunks from vector store
     2. Constructing context-rich prompt
     3. Generating answer with LLM
     4. Providing source attribution
     """
-    
+
     def __init__(
         self,
         vector_store: Optional[VectorStore] = None,
@@ -46,7 +46,7 @@ class RAGAgent:
     ):
         """
         Initialize RAG agent
-        
+
         Args:
             vector_store: Vector store for retrieval
             model: LLM model for generation (defaults to provider-specific model)
@@ -59,53 +59,9 @@ class RAGAgent:
             temperature=temperature if temperature is not None else settings.openai_temperature
         )
         self.max_context_chunks = max_context_chunks
-        
+
         logger.info(f"Initialized RAGAgent (max_chunks={max_context_chunks})")
-    
-    def _build_prompt(self, question: str, chunks: List[SearchResult]) -> str:
-        """
-        Build prompt with retrieved context
-        
-        Args:
-            question: User question
-            chunks: Retrieved chunks
-        
-        Returns:
-            Formatted prompt
-        """
-        # Build context from chunks
-        context_parts = []
-        for i, chunk in enumerate(chunks[:self.max_context_chunks], 1):
-            source = chunk.metadata.get('source', 'unknown')
-            section = chunk.metadata.get('section_title', '')
-            
-            context_parts.append(f"[Source {i}: {source}]")
-            if section:
-                context_parts.append(f"Section: {section}")
-            context_parts.append(chunk.text)
-            context_parts.append("")  # Blank line
-        
-        context = "\n".join(context_parts)
-        
-        prompt = f"""You are a helpful assistant for CrewOS. Answer the question based ONLY on the provided context from the user manual.
 
-IMPORTANT RULES:
-- Only use information from the context below
-- If the answer is not in the context, say "I don't have that information in the user manual"
-- Cite which source(s) you used (e.g., "According to the user manual...")
-- Be specific and accurate
-- If multiple sources conflict, mention both
-- Provide step-by-step instructions when applicable
-
-CONTEXT FROM USER MANUAL:
-{context}
-
-QUESTION: {question}
-
-ANSWER:"""
-        
-        return prompt
-    
     def answer(
         self,
         question: str,
@@ -115,18 +71,18 @@ ANSWER:"""
     ) -> RAGResponse:
         """
         Answer a question using RAG
-        
+
         Args:
             question: User question
             collection: Which collection to search
             k: Number of chunks to retrieve
             metadata_filter: Optional metadata filters
-        
+
         Returns:
             RAG response with answer and sources
         """
         logger.info(f"RAG question: '{question}' (collection={collection}, k={k})")
-        
+
         # Retrieve relevant chunks
         chunks = self.vector_store.search(
             query=question,
@@ -134,7 +90,7 @@ ANSWER:"""
             k=k,
             metadata_filter=metadata_filter
         )
-        
+
         if not chunks:
             logger.warning("No relevant chunks found")
             return RAGResponse(
@@ -144,13 +100,13 @@ ANSWER:"""
                 confidence=0.0,
                 metadata={"collection": collection, "chunks_found": 0}
             )
-        
+
         # Calculate average confidence
         avg_confidence = sum(c.similarity for c in chunks) / len(chunks)
-        
+
         # Build prompt with context
-        prompt = self._build_prompt(question, chunks)
-        
+        prompt = build_rag_prompt(question, chunks, self.max_context_chunks)
+
         # Generate answer using LangChain chat model
         logger.debug(f"Calling LLM with {len(chunks)} chunks as context")
         messages = [HumanMessage(content=prompt)]
@@ -158,7 +114,7 @@ ANSWER:"""
         answer = response.content
         if not answer:
             answer = "I couldn't generate an answer. Please try again."
-        
+
         # Extract sources
         sources = []
         for chunk in chunks:
@@ -168,9 +124,9 @@ ANSWER:"""
                 "similarity": chunk.similarity,
                 "rank": chunk.rank
             })
-        
+
         logger.info(f"Generated answer ({len(answer)} chars) with {len(sources)} sources")
-        
+
         return RAGResponse(
             question=question,
             answer=answer,
@@ -182,20 +138,20 @@ ANSWER:"""
                 "provider": settings.llm_provider
             }
         )
-    
+
     def answer_with_explanation(self, question: str, **kwargs) -> str:
         """
         Answer question and format with sources
-        
+
         Args:
             question: User question
             **kwargs: Additional arguments for answer()
-        
+
         Returns:
             Formatted answer with sources
         """
         response = self.answer(question, **kwargs)
-        
+
         output = []
         output.append(f"Question: {response.question}")
         output.append("")
@@ -210,25 +166,5 @@ ANSWER:"""
                          f"(similarity: {source['similarity']:.3f})")
             if 'section_title' in source['metadata']:
                 output.append(f"      Section: {source['metadata']['section_title']}")
-        
+
         return "\n".join(output)
-
-
-if __name__ == "__main__":
-    # Quick test
-    print("Testing RAG Agent...\n")
-    
-    agent = RAGAgent(max_context_chunks=3)
-    
-    test_questions = [
-        "What are the overtime rules?",
-        "What safety equipment is required for electrical work?",
-        "How do I submit expense reports?",
-        "What is the company policy on PTO?",
-    ]
-    
-    for question in test_questions:
-        print("=" * 80)
-        result = agent.answer_with_explanation(question)
-        print(result)
-        print()

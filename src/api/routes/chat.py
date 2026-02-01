@@ -11,7 +11,7 @@ from typing import AsyncGenerator
 from loguru import logger
 
 from src.api.schemas.chat import ChatStreamRequest, StreamEvent
-from src.agents.orchestrator_agent import get_orchestrator_agent
+from src.agents.orchestrator import get_orchestrator_agent
 from src.memory.conversation_store import get_conversation_db
 from langchain_core.messages import HumanMessage
 import asyncio
@@ -294,7 +294,7 @@ async def stream_orchestrator_response(
         # Fallback: Use stateless mode (no checkpointing)
         logger.warning(f"Checkpoint failed, falling back to stateless mode: {e}")
         try:
-            from src.agents.orchestrator_agent import OrchestratorAgent
+            from src.agents.orchestrator import OrchestratorAgent
             fallback_agent = OrchestratorAgent()  # No checkpointer
             
             # Create fresh initial state for fallback

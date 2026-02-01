@@ -104,30 +104,34 @@ def validate_implementation():
         errors.append("config.py not found")
         print("   ✗ FILE NOT FOUND")
     
-    # Test 4: Check sql_graph_agent.py has domain integration
-    print("\n4. Checking sql_graph_agent.py for domain integration...")
-    sql_agent_file = project_root / "src" / "agents" / "sql_graph_agent.py"
-    if sql_agent_file.exists():
-        content = sql_agent_file.read_text()
+    # Test 4: Check SQL agent has domain integration (agents/sql/)
+    print("\n4. Checking SQL agent domain integration...")
+    sql_state_file = project_root / "src" / "agents" / "sql" / "state.py"
+    sql_domain_file = project_root / "src" / "agents" / "sql" / "nodes" / "domain.py"
+    sql_agent_file = project_root / "src" / "agents" / "sql" / "agent.py"
+    sql_workflow_file = project_root / "src" / "agents" / "sql" / "workflow.py"
+    if all(f.exists() for f in [sql_state_file, sql_domain_file, sql_agent_file, sql_workflow_file]):
+        state_content = sql_state_file.read_text()
+        domain_content = sql_domain_file.read_text()
+        agent_content = sql_agent_file.read_text()
+        workflow_content = sql_workflow_file.read_text()
         integration_checks = [
-            ("Domain imports", "from src.utils.domain_ontology import"),
-            ("domain_terms in SQLGraphState", "domain_terms: List[str]"),
-            ("domain_resolutions in SQLGraphState", "domain_resolutions: List[Dict[str, Any]]"),
-            ("_extract_domain_terms method", "def _extract_domain_terms"),
-            ("_resolve_domain_terms method", "def _resolve_domain_terms"),
-            ("DomainOntology initialization", "self.domain_ontology = DomainOntology()"),
-            ("extract_domain_terms node", 'g.add_node("extract_domain_terms"'),
-            ("resolve_domain_terms node", 'g.add_node("resolve_domain_terms"'),
+            ("domain_terms in SQLGraphState", "domain_terms", state_content),
+            ("domain_resolutions in SQLGraphState", "domain_resolutions", state_content),
+            ("extract_domain_terms_node", "def extract_domain_terms_node", domain_content),
+            ("resolve_domain_terms_node", "def resolve_domain_terms_node", domain_content),
+            ("DomainOntology initialization", "DomainOntology()", agent_content),
+            ("extract_domain_terms node in workflow", '"extract_domain_terms"', workflow_content),
+            ("resolve_domain_terms node in workflow", '"resolve_domain_terms"', workflow_content),
         ]
-        
-        for check_name, check_str in integration_checks:
+        for check_name, check_str, content in integration_checks:
             if check_str in content:
                 print(f"   ✓ {check_name} found")
             else:
-                errors.append(f"{check_name} not found in sql_graph_agent.py")
+                errors.append(f"{check_name} not found in SQL agent")
                 print(f"   ✗ {check_name} NOT FOUND")
     else:
-        errors.append("sql_graph_agent.py not found")
+        errors.append("SQL agent files not found")
         print("   ✗ FILE NOT FOUND")
     
     # Test 5: Check test files exist
@@ -160,12 +164,12 @@ def validate_implementation():
         print("  1. Domain ontology module (domain_ontology.py)")
         print("  2. Domain registry with business terms (domain_registry.json)")
         print("  3. Configuration settings (config.py)")
-        print("  4. SQL agent integration (sql_graph_agent.py)")
+        print("  4. SQL agent integration (agents/sql/)")
         print("  5. Test suite (test_domain_ontology.py)")
         print("\nNext steps:")
         print("  1. Install dependencies: pip install -r requirements.txt")
         print("  2. Configure database connection in .env")
-        print("  3. Test with: python -m src.agents.sql_graph_agent")
+        print("  3. Test with: python -c \"from src.agents.sql import SQLGraphAgent; print(SQLGraphAgent().query('test'))\"")
         print("  4. Try the example query:")
         print("     'Find work orders with crane inspections that have action items'")
         return True

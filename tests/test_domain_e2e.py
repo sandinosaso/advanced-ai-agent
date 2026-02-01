@@ -109,7 +109,7 @@ def test_sql_agent_integration():
     print("\nNOTE: This test requires a database connection.")
     print("Skipping SQL agent integration test (run manually if needed).")
     print("\nTo test manually, run:")
-    print('  python -c "from src.agents.sql_graph_agent import SQLGraphAgent; '
+    print('  python -c "from src.agents.sql import SQLGraphAgent; '
           'agent = SQLGraphAgent(); '
           'result = agent.query(\'Find work orders with crane inspections that have action items\'); '
           'print(result)"')

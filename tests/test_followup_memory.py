@@ -283,52 +283,56 @@ def test_implementation_validation():
         errors.append("query_memory.py not found")
         print("   ✗ FILE NOT FOUND")
     
-    # Check sql_graph_agent.py has follow-up support
-    print("\n2. Checking sql_graph_agent.py...")
-    sql_agent_file = project_root / "src" / "agents" / "sql_graph_agent.py"
-    if sql_agent_file.exists():
-        content = sql_agent_file.read_text()
+    # Check SQL agent has follow-up support (agents/sql/)
+    print("\n2. Checking SQL agent follow-up support...")
+    sql_state_file = project_root / "src" / "agents" / "sql" / "state.py"
+    sql_followup_file = project_root / "src" / "agents" / "sql" / "nodes" / "followup.py"
+    sql_workflow_file = project_root / "src" / "agents" / "sql" / "workflow.py"
+    if sql_state_file.exists() and sql_followup_file.exists() and sql_workflow_file.exists():
+        state_content = sql_state_file.read_text()
+        followup_content = sql_followup_file.read_text()
+        workflow_content = sql_workflow_file.read_text()
         checks = [
-            ("previous_results in SQLGraphState", "previous_results"),
-            ("is_followup in SQLGraphState", "is_followup"),
-            ("referenced_ids in SQLGraphState", "referenced_ids"),
-            ("_detect_followup_question method", "def _detect_followup_question"),
-            ("detect_followup node", '"detect_followup"'),
+            ("previous_results in SQLGraphState", "previous_results", state_content),
+            ("is_followup in SQLGraphState", "is_followup", state_content),
+            ("referenced_ids in SQLGraphState", "referenced_ids", state_content),
+            ("detect_followup_node function", "def detect_followup_node", followup_content),
+            ("detect_followup node in workflow", '"detect_followup"', workflow_content),
         ]
-        
-        for check_name, check_str in checks:
+        for check_name, check_str, content in checks:
             if check_str in content:
                 print(f"   ✓ {check_name} found")
             else:
-                errors.append(f"{check_name} not found in sql_graph_agent.py")
+                errors.append(f"{check_name} not found in SQL agent")
                 print(f"   ✗ {check_name} NOT FOUND")
     else:
-        errors.append("sql_graph_agent.py not found")
+        errors.append("SQL agent files not found (state.py, nodes/followup.py, workflow.py)")
         print("   ✗ FILE NOT FOUND")
     
-    # Check orchestrator_agent.py has memory support
-    print("\n3. Checking orchestrator_agent.py...")
-    orch_file = project_root / "src" / "agents" / "orchestrator_agent.py"
-    if orch_file.exists():
-        content = orch_file.read_text()
-        checks = [
-            ("query_result_memory in AgentState", "query_result_memory"),
-            ("QueryResultMemory import", "from src.utils.query_memory import QueryResultMemory"),
-        ]
-        
-        for check_name, check_str in checks:
-            if check_str in content:
-                print(f"   ✓ {check_name} found")
-            else:
-                errors.append(f"{check_name} not found in orchestrator_agent.py")
-                print(f"   ✗ {check_name} NOT FOUND")
+    # Check orchestrator has memory support
+    print("\n3. Checking orchestrator memory support...")
+    state_file = project_root / "src" / "agents" / "orchestrator" / "state.py"
+    sql_node_file = project_root / "src" / "agents" / "orchestrator" / "nodes" / "sql_agent.py"
+    if state_file.exists() and sql_node_file.exists():
+        state_content = state_file.read_text()
+        sql_node_content = sql_node_file.read_text()
+        if "query_result_memory" in state_content:
+            print(f"   ✓ query_result_memory in AgentState found")
+        else:
+            errors.append("query_result_memory not found in orchestrator state")
+            print(f"   ✗ query_result_memory NOT FOUND")
+        if "QueryResultMemory" in sql_node_content:
+            print(f"   ✓ QueryResultMemory usage found")
+        else:
+            errors.append("QueryResultMemory not found in orchestrator sql_agent node")
+            print(f"   ✗ QueryResultMemory NOT FOUND")
     else:
-        errors.append("orchestrator_agent.py not found")
+        errors.append("orchestrator files not found")
         print("   ✗ FILE NOT FOUND")
     
-    # Check config.py has settings
-    print("\n4. Checking config.py...")
-    config_file = project_root / "src" / "utils" / "config.py"
+    # Check config has settings
+    print("\n4. Checking config...")
+    config_file = project_root / "src" / "config" / "settings.py"
     if config_file.exists():
         content = config_file.read_text()
         checks = [
@@ -341,10 +345,10 @@ def test_implementation_validation():
             if check_str in content:
                 print(f"   ✓ {check_name} found")
             else:
-                errors.append(f"{check_name} not found in config.py")
+                errors.append(f"{check_name} not found in config")
                 print(f"   ✗ {check_name} NOT FOUND")
     else:
-        errors.append("config.py not found")
+        errors.append("config not found")
         print("   ✗ FILE NOT FOUND")
     
     if errors:
