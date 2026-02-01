@@ -12,9 +12,12 @@ from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 from loguru import logger
 
-# Find project root (where .env file is located)
-# This file is at src/config/settings.py, so project root is 2 levels up
-_project_root = Path(__file__).parent.parent.parent
+# Find project root (api-ai-agent directory, where .env and data/ live)
+# This file is at src/config/settings.py, so project root is 3 levels up
+_project_root = Path(__file__).resolve().parent.parent.parent
+
+# Export for use by vector_store, embeddings, etc. - ensures consistent data/ paths
+PROJECT_ROOT = _project_root
 
 # Load environment variables from project root
 _env_file = _project_root / ".env"

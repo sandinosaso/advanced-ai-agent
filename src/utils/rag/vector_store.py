@@ -65,9 +65,8 @@ class VectorStore:
             embedding_service: Service for generating embeddings
         """
         if persist_directory is None:
-            # Find project root (this file is at src/utils/rag/vector_store.py)
-            project_root = Path(__file__).parent.parent.parent.parent
-            persist_directory = project_root / "data" / "vector_store"
+            from src.config.settings import PROJECT_ROOT
+            persist_directory = PROJECT_ROOT / "data" / "vector_store"
         
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)

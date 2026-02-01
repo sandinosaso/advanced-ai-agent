@@ -101,9 +101,8 @@ class EmbeddingService:
         
         # Set up cache directory
         if cache_dir is None:
-            # Find project root (this file is at src/utils/rag/embedding_service.py)
-            project_root = Path(__file__).parent.parent.parent.parent
-            cache_dir = project_root / "data" / "embeddings_cache"
+            from src.config.settings import PROJECT_ROOT
+            cache_dir = PROJECT_ROOT / "data" / "embeddings_cache"
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
