@@ -1,0 +1,44 @@
+# ============================================
+# TEST - Runs on MRs with "run-tests" label targeting develop or main
+# ============================================
+
+test:mr:
+  stage: test
+  image: python:3.11-slim
+  before_script:
+    - pip install uv
+    - uv sync --extra dev
+  script:
+    - ./scripts/run_tests.sh
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .venv/
+  rules:
+    # Run when MR has the "run-tests" label and targets develop or main
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_LABELS =~ /run-tests/ && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ /^(develop|main)$/'
+      when: on_success
+    # Also run on direct push to develop or main
+    - if: '$CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "main"'
+      when: on_success
+    # Never run otherwise
+    - when: never
+  allow_failure: false
+
+# ============================================
+# DEPLOY - SSH to prod server on main
+# Requires CI/CD variable: SSH_PRIVATE_KEY (masked, protected)
+# ============================================
+
+deploy:prod:
+  stage: deploy
+  image: rockylinux:8
+  script:
+    - dnf install openssh-clients -y
+    - eval $(ssh-agent -s)
+    - ssh-add <(echo "$SSH_PRIVATE_KEY")
+    - ssh -o StrictHostKeyChecking=no -t ubuntu@54.90.67.217 "/home/ubuntu/deploy.sh"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: on_success
+    - when: never

@@ -47,27 +47,22 @@ This directory contains the consolidated documentation for the Advanced AI Agent
 
 ## Specialized Documentation
 
-Detailed documentation on specific topics is available in the [`specialized/`](./specialized/) folder:
+Detailed documentation on specific topics is available in the [`specialized/`](./specialized/) folder. See [specialized/README.md](./specialized/README.md) for the full index.
 
-- **[JOIN_GRAPH_PIPELINE.md](./specialized/JOIN_GRAPH_PIPELINE.md)** - Detailed documentation on the join graph pipeline and how relationships are discovered.
-
-- **[SECURE_VIEWS_ARCHITECTURE.md](./specialized/SECURE_VIEWS_ARCHITECTURE.md)** - Comprehensive guide to the secure views architecture and how it prevents LLM hallucinations.
-
-- **[PATH_FINDER_IMPLEMENTATION.md](./specialized/PATH_FINDER_IMPLEMENTATION.md)** - Documentation on the path finder implementation using Dijkstra's algorithm.
-
-- **[MODEL_LIMITS_AND_COSTS.md](./specialized/MODEL_LIMITS_AND_COSTS.md)** - Reference for OpenAI model limits, costs, and optimization strategies.
-
-- **[MYSQL_SESSION_VARIABLES.md](./specialized/MYSQL_SESSION_VARIABLES.md)** - Documentation on MySQL session variables for secure views.
+| Topic | Document |
+|-------|----------|
+| SQL Agent, Join Graph, Path Finder, Audit Filtering | [SQL_AGENT_AND_JOIN_GRAPH.md](./specialized/SQL_AGENT_AND_JOIN_GRAPH.md) |
+| Secure Views & Database Session Variables | [SECURE_VIEWS_AND_DATABASE.md](./specialized/SECURE_VIEWS_AND_DATABASE.md) |
+| Domain Ontology & Template Scoping | [DOMAIN_ONTOLOGY.md](./specialized/DOMAIN_ONTOLOGY.md) |
+| RAG & Vector Store | [RAG_AND_VECTOR_STORE.md](./specialized/RAG_AND_VECTOR_STORE.md) |
+| Follow-up Memory | [FOLLOWUP_QUESTIONS_MEMORY.md](./specialized/FOLLOWUP_QUESTIONS_MEMORY.md) |
+| BFF Integration & Model Limits | [INTEGRATION_AND_REFERENCE.md](./specialized/INTEGRATION_AND_REFERENCE.md) |
 
 ## Documentation Structure
 
-The documentation is organized into:
-
-- **3 core documents** (in root): Architecture, Implementation Guide, and Reference
-- **5 specialized documents** (in `specialized/`): Deep dives on specific topics
-- **README.md**: This file - documentation index
-
-All historical phase documentation has been removed as information has been consolidated into the core documents.
+- **3 core documents** (in root): Architecture, Implementation Guide, Reference
+- **6 specialized documents** (in `specialized/`): Deep dives grouped by topic
+- **specialized/README.md**: Index of specialized docs
 
 ## Getting Started
 

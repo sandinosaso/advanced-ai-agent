@@ -119,9 +119,11 @@ class TestDomainContextFormatting(unittest.TestCase):
         resolution = ontology.resolve_domain_term('inspection_questions')
         self.assertIsNotNone(resolution)
         self.assertEqual(resolution.term, 'inspection_questions')
-        self.assertEqual(resolution.entity, 'inspection_detail')
+        self.assertEqual(resolution.entity, 'inspection_form_questions')
         self.assertIn('inspectionQuestion', resolution.tables)
-        self.assertIn('inspectionQuestionAnswer', resolution.tables)
+        # inspection_questions includes inspection flow tables (inspectionQuestion, etc.)
+        # inspectionQuestionAnswer is in inspection_questions_and_answers, not inspection_questions
+        self.assertIn('inspection', resolution.tables)
         self.assertEqual(len(resolution.filters), 0)  # Structural match has no filters
         self.assertEqual(resolution.confidence, 0.95)
 

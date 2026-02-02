@@ -12,7 +12,6 @@ from src.config.settings import settings
 from src.memory.query_memory import QueryResultMemory
 
 
-@trace_step("detect_followup")
 def detect_followup_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     """
     Detect if the question is a follow-up referencing previous results.
@@ -22,6 +21,7 @@ def detect_followup_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState
     if not settings.followup_detection_enabled:
         state["is_followup"] = False
         state["referenced_ids"] = None
+        state["referenced_entity"] = None
         return state
 
     previous_results = state.get("previous_results")
@@ -29,6 +29,7 @@ def detect_followup_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState
     if not previous_results:
         state["is_followup"] = False
         state["referenced_ids"] = None
+        state["referenced_entity"] = None
         return state
 
     question = state["question"]
@@ -51,6 +52,7 @@ def detect_followup_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState
     if not context:
         state["is_followup"] = False
         state["referenced_ids"] = None
+        state["referenced_entity"] = None
         return state
 
     prompt = f"""Analyze if this question is a follow-up referencing previous query results.
@@ -118,6 +120,7 @@ If is_followup=false, set referenced_entity and referenced_ids to null.
 
         state["is_followup"] = is_followup
         state["referenced_ids"] = referenced_ids if is_followup else None
+        state["referenced_entity"] = referenced_entity if is_followup else None
 
         if is_followup:
             logger.info(
@@ -131,5 +134,6 @@ If is_followup=false, set referenced_entity and referenced_ids to null.
         logger.warning(f"Failed to detect follow-up question: {e}. Treating as new question.")
         state["is_followup"] = False
         state["referenced_ids"] = None
+        state["referenced_entity"] = None
 
     return state

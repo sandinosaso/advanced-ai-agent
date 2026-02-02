@@ -13,7 +13,6 @@ from src.config.settings import settings
 from src.sql.execution.secure_rewriter import rewrite_secure_tables, from_secure_view
 
 
-@trace_step("correct_sql")
 def correct_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     """
     Focused correction agent that fixes SQL errors.

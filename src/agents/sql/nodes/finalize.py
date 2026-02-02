@@ -10,7 +10,6 @@ from src.agents.sql.utils import trace_step
 from src.agents.sql.nodes.executor import _parse_sql_result
 
 
-@trace_step("finalize")
 def finalize_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     """
     Finalize SQL result and parse structured data for BFF markdown conversion.

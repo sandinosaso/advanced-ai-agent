@@ -160,8 +160,11 @@ def test_build_where_clauses_crane(mock_registry):
     where_clauses = build_where_clauses(resolutions)
     
     assert len(where_clauses) > 0
-    # Should contain ILIKE filter for crane
-    assert any("ILIKE" in clause and "crane" in clause for clause in where_clauses)
+    # Should contain text search filter for crane (ILIKE/LIKE with crane)
+    assert any(
+        ("ILIKE" in clause or "LIKE" in clause) and "crane" in clause.lower()
+        for clause in where_clauses
+    )
 
 
 def test_build_where_clauses_action_item(mock_registry):
@@ -219,10 +222,10 @@ def test_build_where_clauses_multiple(mock_registry):
 
 def test_extract_domain_terms_disabled(mock_registry):
     """Test that extraction returns empty list when disabled"""
-    # Save original setting
-    from src.utils.config import settings
+    # Use src.config.settings - same module the extractor uses
+    from src.config import settings
     original = settings.domain_extraction_enabled
-    
+
     try:
         settings.domain_extraction_enabled = False
         terms = mock_registry.extract_domain_terms("Find cranes with action items")

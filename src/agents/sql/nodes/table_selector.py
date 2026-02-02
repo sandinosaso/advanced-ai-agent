@@ -13,7 +13,6 @@ from src.domain.ontology.formatter import format_domain_context_for_table_select
 from src.memory.query_memory import QueryResultMemory
 
 
-@trace_step("select_tables")
 def select_tables_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     """
     Select minimal set of tables needed to answer the question.

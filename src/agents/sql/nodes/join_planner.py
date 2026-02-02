@@ -19,7 +19,6 @@ from src.agents.sql.planning import (
 )
 
 
-@trace_step("filter_relationships")
 def filter_relationships_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     """
     Filter and expand relationships to include transitive join paths.
@@ -93,7 +92,6 @@ def filter_relationships_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraph
     return state
 
 
-@trace_step("plan_joins")
 def plan_joins_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     """
     Plan the join path(s) using allowed relationships.

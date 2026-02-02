@@ -14,26 +14,26 @@ The Follow-up Question Memory system enables natural conversational interactions
 
 ### Components
 
-1. **QueryResultMemory** (`src/utils/query_memory.py`)
+1. **QueryResultMemory** (`src/memory/query_memory.py`)
    - Stores the last N SQL query results
    - Extracts key identifiers (IDs) from results
    - Formats context for LLM prompts
    - Serializes/deserializes for checkpoint persistence
 
-2. **Follow-up Detection** (`src/agents/sql_graph_agent.py`)
-   - New workflow step: `_detect_followup_question()`
+2. **Follow-up Detection** (`src/agents/sql/nodes/followup.py`)
+   - Workflow node: `detect_followup_node`
    - Uses LLM to classify if question references previous results
    - Extracts referenced entities and IDs
 
 3. **Context-Aware Table Selection**
-   - Enhanced `_select_tables()` to use previous query context
+   - `select_tables_node` (`src/agents/sql/nodes/table_selector.py`) uses previous query context
    - Guides LLM to use known IDs instead of rebuilding filters
 
 4. **Context-Aware SQL Generation**
-   - Enhanced `_generate_sql()` to inject known IDs in WHERE clauses
+   - `generate_sql_node` (`src/agents/sql/nodes/sql_generator.py`) injects known IDs in WHERE clauses
    - Skips redundant joins when IDs are already known
 
-5. **Memory Persistence** (`src/agents/orchestrator_agent.py`)
+5. **Memory Persistence** (`src/agents/orchestrator/`)
    - Stores query results in orchestrator state
    - LangGraph checkpoint automatically persists memory
    - Memory survives across conversation turns
@@ -59,7 +59,7 @@ graph TB
 
 ## Configuration
 
-New settings in `src/utils/config.py`:
+Settings in `src/config/settings.py`:
 
 ```python
 # Follow-up Question Memory Configuration
@@ -218,8 +218,8 @@ Comprehensive test suite in `tests/test_followup_memory.py`:
 Run tests:
 ```bash
 cd api-ai-agent
-source .venv/bin/activate
-python tests/test_followup_memory.py
+./scripts/run_tests.sh
+# or: pytest tests/test_followup_memory.py -v
 ```
 
 ## Checkpoint Persistence
@@ -249,6 +249,6 @@ Memory is automatically persisted via LangGraph checkpointing:
 
 ## Related Documentation
 
-- [Architecture](./ARCHITECTURE.md) - Overall system architecture
-- [Domain Ontology](./specialized/DOMAIN_ONTOLOGY.md) - Business term resolution
-- [SQL Agent](./ARCHITECTURE.md#2-sql-graph-agent) - SQL generation workflow
+- [Architecture](../ARCHITECTURE.md) - Overall system architecture
+- [Domain Ontology](./DOMAIN_ONTOLOGY.md) - Business term resolution
+- [SQL Agent & Join Graph](./SQL_AGENT_AND_JOIN_GRAPH.md) - SQL generation workflow

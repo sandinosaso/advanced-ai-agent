@@ -119,7 +119,6 @@ def _parse_sql_result(
     return None
 
 
-@trace_step("execute_and_validate")
 def execute_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     """
     Execute SQL and validate result.

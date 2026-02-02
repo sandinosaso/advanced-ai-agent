@@ -468,7 +468,6 @@ LOG_LEVEL=DEBUG
 The SQL agent includes trace decorators:
 
 ```python
-@trace_step('select_tables')
 def _select_tables(self, state):
     # Automatically logs:
     # - Step start/end

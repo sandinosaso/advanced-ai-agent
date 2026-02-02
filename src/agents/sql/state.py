@@ -26,3 +26,4 @@ class SQLGraphState(TypedDict):
     previous_results: Optional[List[Dict[str, Any]]]
     is_followup: bool
     referenced_ids: Optional[Dict[str, List]]
+    referenced_entity: Optional[str]  # e.g. "inspection", "workOrder" - from follow-up detection

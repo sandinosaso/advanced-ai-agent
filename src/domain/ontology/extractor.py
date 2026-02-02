@@ -160,21 +160,25 @@ Return ONLY a JSON array of strings, e.g. ["crane", "inspection"]."""
             result.append(term)
         return result
     
-    def extract_domain_terms(self, question: str) -> List[str]:
+    def extract_domain_terms(
+        self, question: str, implied_atomic_signals: List[str] | None = None
+    ) -> List[str]:
         """
         Extract domain-specific business terms from natural language question.
         Two-phase: Pass 1 atomic signals (LLM), Pass 2 compound eligibility (deterministic).
         Returns only registry term keys that pass both phases.
+
+        When implied_atomic_signals is provided (e.g. from follow-up context), these are
+        merged with LLM-extracted signals. This handles terse follow-up questions like
+        "Now for that inspections I want all questions and answers" where the LLM may
+        return [] but we know from follow-up detection that "inspection" is the context.
         
         Args:
             question: Natural language question
+            implied_atomic_signals: Optional signals from follow-up context (e.g. ["inspection"])
             
         Returns:
             List of registry term keys found in the question
-            
-        Example:
-            "Find crane inspections" (no "question"/"answer"/"form") → ["crane"]
-            "Show questions for that inspection" → ["inspection_questions"] when atomic signals include inspection and question
         """
         if not settings.domain_extraction_enabled:
             logger.debug("Domain extraction disabled")
@@ -185,6 +189,12 @@ Return ONLY a JSON array of strings, e.g. ["crane", "inspection"]."""
             return []
         # Pass 1: atomic signals only (may include non-registry e.g. "inspection")
         atomic_signals = self.extract_atomic_signals(question)
+        # Merge implied signals from follow-up context when LLM returns empty
+        if implied_atomic_signals:
+            for s in implied_atomic_signals:
+                if s and s.lower() not in {x.lower() for x in atomic_signals}:
+                    atomic_signals.append(s)
+            logger.info(f"Merged implied atomic signals: {implied_atomic_signals} -> {atomic_signals}")
         # Pass 2: deterministic compound eligibility + negative gate
         valid_terms = self.compute_final_registry_terms(question, atomic_signals)
         logger.info(f"Extracted domain terms (two-phase): {valid_terms}")

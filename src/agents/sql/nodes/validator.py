@@ -13,7 +13,6 @@ from src.sql.execution.secure_rewriter import from_secure_view
 from src.agents.sql.planning import extract_tables_from_join_plan
 
 
-@trace_step("validate_sql")
 def validate_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     """
     Validate SQL before execution to catch column/join errors early.

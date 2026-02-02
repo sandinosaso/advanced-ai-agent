@@ -117,7 +117,6 @@ def _inject_domain_filters(sql: str, domain_resolutions: List[Dict[str, Any]]) -
     return sql
 
 
-@trace_step("generate_sql")
 def generate_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     """
     Generate SQL query based on join plan.

@@ -10,7 +10,6 @@ from src.agents.sql.utils import trace_step
 from src.config.settings import settings
 
 
-@trace_step("extract_domain_terms")
 def extract_domain_terms_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     """
     Extract domain-specific business terms from the question.
@@ -23,8 +22,30 @@ def extract_domain_terms_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraph
 
     question = state["question"]
 
+    # For follow-up questions, pass implied atomic signals from context.
+    # The LLM often returns [] for terse follow-ups like "Now for that inspections I want
+    # all questions and answers", but we know from follow-up detection that the entity
+    # is "inspection". This allows inspection_questions_and_answers to be resolved,
+    # which injects the correct tables (inspectionQuestionGroup, etc.) into table selection.
+    implied_signals: list[str] = []
+    if state.get("is_followup") and state.get("referenced_entity"):
+        entity = state["referenced_entity"]
+        if entity and entity.lower() in ("inspection", "safety", "service"):
+            implied_signals = [entity.lower()]
+    elif state.get("is_followup") and state.get("referenced_ids"):
+        # Infer entity from referenced_ids when referenced_entity not set
+        rid = state["referenced_ids"]
+        if "inspectionId" in rid:
+            implied_signals = ["inspection"]
+        elif "safetyId" in rid:
+            implied_signals = ["safety"]
+        elif "serviceId" in rid:
+            implied_signals = ["service"]
+
     try:
-        domain_terms = ctx.domain_ontology.extract_domain_terms(question)
+        domain_terms = ctx.domain_ontology.extract_domain_terms(
+            question, implied_atomic_signals=implied_signals if implied_signals else None
+        )
         state["domain_terms"] = domain_terms
         state["domain_resolutions"] = []
 
@@ -37,7 +58,6 @@ def extract_domain_terms_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraph
     return state
 
 
-@trace_step("resolve_domain_terms")
 def resolve_domain_terms_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     """
     Resolve domain terms to schema locations.

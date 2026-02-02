@@ -66,23 +66,15 @@ class DomainOntology:
             logger.error(f"Failed to load domain registry: {e}")
             self.registry = {"version": 1, "terms": {}}
     
-    def extract_domain_terms(self, question: str) -> List[str]:
+    def extract_domain_terms(
+        self, question: str, implied_atomic_signals: List[str] | None = None
+    ) -> List[str]:
         """
         Extract domain-specific business terms from natural language question.
         Two-phase: Pass 1 atomic signals (LLM), Pass 2 compound eligibility (deterministic).
-        Returns only registry term keys that pass both phases.
-        
-        Args:
-            question: Natural language question
-            
-        Returns:
-            List of registry term keys found in the question
-            
-        Example:
-            "Find crane inspections" (no "question"/"answer"/"form") → ["crane"]
-            "Show questions for that inspection" → ["inspection_questions"] when atomic signals include inspection and question
+        implied_atomic_signals: Optional signals from follow-up context (e.g. ["inspection"]).
         """
-        return self.extractor.extract_domain_terms(question)
+        return self.extractor.extract_domain_terms(question, implied_atomic_signals)
     
     def resolve_domain_term(self, term: str) -> Optional[DomainResolution]:
         """
@@ -115,6 +107,13 @@ class DomainOntology:
     def get_all_domain_terms(self) -> List[str]:
         """Get list of all known domain terms"""
         return list(self.registry.get("terms", {}).keys())
+
+    def compute_final_registry_terms(self, question: str, atomic_signals: List[str]) -> List[str]:
+        """
+        Pass 2 (deterministic): Compute final registry terms from atomic signals.
+        Delegates to the extractor.
+        """
+        return self.extractor.compute_final_registry_terms(question, atomic_signals)
 
 
 # Re-export for backward compatibility
