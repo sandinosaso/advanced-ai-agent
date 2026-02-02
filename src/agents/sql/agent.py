@@ -10,6 +10,7 @@ from src.utils.logging import logger
 from src.sql.graph.join_graph import load_join_graph
 from src.sql.graph.path_finder import JoinPathFinder
 from src.domain.ontology import DomainOntology
+from src.domain.display_attributes import DisplayAttributesManager
 from src.sql.execution.executor import sql_tool
 
 from src.agents.sql.state import SQLGraphState
@@ -47,11 +48,24 @@ class SQLGraphAgent:
         else:
             self.domain_ontology = None
             logger.info("Domain ontology disabled")
+        
+        # Initialize display attributes manager
+        if settings.display_attributes_enabled:
+            try:
+                self.display_attributes = DisplayAttributesManager()
+                logger.info("Display attributes manager initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize display attributes: {e}. Proceeding without display attributes.")
+                self.display_attributes = None
+        else:
+            self.display_attributes = None
+            logger.info("Display attributes disabled")
 
         ctx = SQLContext(
             join_graph=self.join_graph,
             path_finder=self.path_finder,
             domain_ontology=self.domain_ontology,
+            display_attributes=self.display_attributes,
             llm=self.llm,
             sql_tool=sql_tool,
         )

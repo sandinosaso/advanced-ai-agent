@@ -13,5 +13,6 @@ class SQLContext:
     join_graph: Dict[str, Any]
     path_finder: Any  # JoinPathFinder
     domain_ontology: Optional[Any]  # DomainOntology or None
+    display_attributes: Optional[Any]  # DisplayAttributesManager or None
     llm: Any  # LangChain ChatModel
     sql_tool: Any  # SQLQueryTool

@@ -406,3 +406,74 @@ def build_column_mismatch_example(join_graph: Dict[str, Any]) -> str:
     
     # Generic fallback
     return "- Do NOT assume columns exist in the wrong table - verify each column exists in the table you're referencing"
+
+
+def build_display_attributes_examples(
+    display_manager: Any,  # DisplayAttributesManager type
+    tables: List[str],
+    max_examples: int = 5
+) -> str:
+    """
+    Build examples showing proper display column selection based on display attributes.
+    
+    Args:
+        display_manager: DisplayAttributesManager instance
+        tables: List of table names in the query
+        max_examples: Maximum number of examples to include
+        
+    Returns:
+        Formatted string with display column examples
+    """
+    if not display_manager or not tables:
+        return ""
+    
+    examples = []
+    example_count = 0
+    
+    for table in sorted(tables):
+        if example_count >= max_examples:
+            break
+        
+        if not display_manager.has_configuration(table):
+            continue
+        
+        display_cols = display_manager.get_display_columns(table, include_id=True)
+        primary_label = display_manager.get_primary_label(table)
+        template_rel = display_manager.get_template_relationship(table)
+        
+        if not display_cols or len(display_cols) <= 1:
+            continue
+        
+        # Build example based on table configuration
+        if primary_label:
+            # Table has human-readable labels
+            label_str = ", ".join(primary_label)
+            examples.append(
+                f"- For {table} queries, SELECT {', '.join(display_cols[:4])} "
+                f"(always include {label_str} for readability, not just id)"
+            )
+        elif template_rel:
+            # Table has template relationship
+            template_table = template_rel.get("template_table")
+            template_cols = template_rel.get("template_columns", ["name"])
+            examples.append(
+                f"- For {table} queries, include {template_table}.{template_cols[0]} "
+                f"to show human-readable name (requires join via template relationship)"
+            )
+        else:
+            # Generic display columns
+            examples.append(
+                f"- For {table} queries, prefer selecting {', '.join(display_cols[:4])} "
+                f"(human-readable columns, not just id)"
+            )
+        
+        example_count += 1
+    
+    if not examples:
+        return ""
+    
+    result = "\nDISPLAY COLUMN EXAMPLES:\n"
+    result += "\n".join(examples)
+    result += "\n"
+    
+    return result

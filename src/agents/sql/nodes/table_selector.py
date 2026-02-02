@@ -105,6 +105,28 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
             if table in ctx.join_graph["tables"] and table not in tables:
                 tables.append(table)
                 logger.info(f"Added domain-required table: {table}")
+        
+        # Add template tables if display attributes require them
+        if settings.display_attributes_enabled and ctx.display_attributes:
+            template_tables_needed = set()
+            for table in tables:
+                template_rel = ctx.display_attributes.get_template_relationship(table)
+                if template_rel:
+                    # Add template table
+                    template_table = template_rel.get("template_table")
+                    if template_table and template_table in ctx.join_graph["tables"]:
+                        template_tables_needed.add(template_table)
+                    
+                    # Add via/bridge tables
+                    via_tables = template_rel.get("via_tables", [])
+                    for via_table in via_tables:
+                        if via_table in ctx.join_graph["tables"]:
+                            template_tables_needed.add(via_table)
+            
+            for template_table in template_tables_needed:
+                if template_table not in tables:
+                    tables.append(template_table)
+                    logger.info(f"Added template-required table for display: {template_table}")
     except Exception as e:
         logger.warning(f"Failed to parse table selection: {e}. Raw output: {raw}")
         

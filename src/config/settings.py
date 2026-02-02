@@ -109,6 +109,12 @@ class Settings(BaseSettings):
     domain_extraction_enabled: bool = Field(default=True)  # Enable LLM-based domain term extraction
     domain_fallback_to_text_search: bool = Field(default=True)  # Fallback to text search when no domain match
     
+    # Display Attributes Configuration
+    display_attributes_enabled: bool = Field(default=True)  # Enable display attributes for column selection
+    display_attributes_registry_path: str = Field(default="artifacts/display_attributes_registry.json")  # Path to display attributes registry
+    display_attributes_always_include_id: bool = Field(default=True)  # Always include ID column in results
+    display_attributes_max_columns: int = Field(default=10)  # Max display columns per table in prompts
+    
     # Token Limits
     max_context_tokens: int = Field(default=120000)
     max_output_tokens: int = Field(default=4000)

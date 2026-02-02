@@ -21,6 +21,7 @@ from src.agents.sql.prompt_helpers import (
     build_name_label_examples,
     build_bridge_table_example,
     build_column_mismatch_example,
+    build_display_attributes_examples,
 )
 
 
@@ -170,6 +171,15 @@ def generate_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     name_label_examples = build_name_label_examples(ctx.join_graph, max_examples=4)
     bridge_example = build_bridge_table_example(ctx.join_graph)
     column_mismatch_example = build_column_mismatch_example(ctx.join_graph)
+    
+    # Build display attributes examples if enabled
+    display_attributes_examples = ""
+    if settings.display_attributes_enabled and ctx.display_attributes:
+        display_attributes_examples = build_display_attributes_examples(
+            ctx.display_attributes, 
+            list(all_tables), 
+            max_examples=5
+        )
 
     followup_where_clause = ""
     if state.get("is_followup") and state.get("referenced_ids"):
@@ -252,7 +262,14 @@ CRITICAL RULES:
 - Use logical table names (not secure_* prefixed versions)
 - DO NOT add secure_ prefix - the system handles that automatically
 
+IMPORTANT - SELECT CLAUSE GUIDANCE:
+- ALWAYS include human-readable identifiers (name, firstName/lastName, description) in your SELECT
+- For inspection queries: include inspectionTemplate.name to show which inspection type
+- For employee queries: include firstName and lastName, not just id
+- For status queries: include the status name column, not just the ID
+- Even in aggregate queries, include identifying columns in SELECT and GROUP BY
 {name_label_examples if name_label_examples else ""}
+{display_attributes_examples if display_attributes_examples else ""}
 {followup_where_clause}
 Question: {state['question']}
 

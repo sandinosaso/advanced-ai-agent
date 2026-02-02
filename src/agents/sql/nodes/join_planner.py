@@ -156,6 +156,23 @@ def plan_joins_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
         domain_filter_hints = "\n" + format_domain_context(domain_resolutions) + "\n"
         domain_filter_hints += "IMPORTANT: Plan joins to include tables needed for domain filters.\n"
         domain_filter_hints += "The WHERE clause will filter based on these domain concepts.\n"
+    
+    # Add display attributes hints for template relationships
+    display_hints = ""
+    if settings.display_attributes_enabled and ctx.display_attributes:
+        template_rels = ctx.display_attributes.get_tables_with_template_relationships(selected_tables)
+        if template_rels:
+            display_hints = "\n\nDISPLAY ATTRIBUTES - TEMPLATE RELATIONSHIPS:\n"
+            display_hints += "The following tables need joins to their templates for human-readable names:\n"
+            for table, rel_config in template_rels.items():
+                template_table = rel_config.get("template_table")
+                via_tables = rel_config.get("via_tables", [])
+                if via_tables:
+                    path = f"{table} → {' → '.join(via_tables)} → {template_table}"
+                else:
+                    path = f"{table} → {template_table}"
+                display_hints += f"  - {path}\n"
+            display_hints += "IMPORTANT: Include these joins in your plan to show descriptive names.\n"
 
     selected_set = set(selected_tables)
     if ctx.domain_ontology and domain_resolutions:
@@ -196,6 +213,7 @@ These paths are computed by the graph algorithm and include ALL bridge tables ne
 Direct and transitive relationships available (for reference only - prefer suggested paths):
 {json.dumps(rels_display[:settings.sql_max_relationships_in_prompt], indent=2)}
 {domain_filter_hints}
+{display_hints}
 Task:
 - PRIMARY: Use the suggested paths above - they are computed by the graph algorithm and are correct
 - If a PREFERRED JOIN CHAIN is stated above for this domain, USE THAT CHAIN in order (do not use a shorter path that skips tables in the chain)
