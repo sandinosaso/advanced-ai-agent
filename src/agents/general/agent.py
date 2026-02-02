@@ -7,7 +7,7 @@ Handles questions that don't require SQL or RAG (e.g., definitions, explanations
 from typing import List, Optional, Sequence
 from loguru import logger
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
 
 from src.llm.client import create_llm
@@ -55,10 +55,26 @@ class GeneralAgent:
             Answer string
         """
         logger.info(f"General agent question: '{question}'")
+        logger.info(f"General agent received {len(messages)} messages for context")
 
-        messages_for_llm = list(messages)
-        if not messages_for_llm or not isinstance(messages_for_llm[-1], HumanMessage):
+        # Add system message to instruct the LLM to use conversation history
+        system_message = SystemMessage(content="""You are a helpful AI assistant with access to the conversation history.
+
+IMPORTANT: You have full access to our conversation history. When asked about:
+- Previous questions: Review the conversation and list what the user asked
+- What we discussed: Summarize topics from our conversation
+- Earlier responses: Reference specific answers you gave before
+- Context from history: Use previous messages to provide relevant answers
+
+The conversation history is provided in the messages above. Use it to give accurate, context-aware responses.""")
+        
+        messages_for_llm = [system_message] + list(messages)
+        if not isinstance(messages_for_llm[-1], HumanMessage):
             messages_for_llm.append(HumanMessage(content=question))
+        
+        logger.debug(f"Sending {len(messages_for_llm)} messages to LLM (including system message)")
+        if len(messages_for_llm) > 2:  # system + at least 1 previous + current
+            logger.debug(f"Previous messages included: {len(messages_for_llm) - 2} messages")
 
         response = self.llm.invoke(messages_for_llm)
         answer = (
