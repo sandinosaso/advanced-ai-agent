@@ -7,23 +7,30 @@
 - Python 3.11+
 - MySQL 8.0+
 - Node.js 20+ (for BFF layer)
-- OpenAI API key
+- OpenAI API key (or Ollama for local)
 
 ### Installation
 
 ```bash
-# Install Python dependencies
-cd apps/backend
+# Navigate to api-ai-agent project root
+cd api-ai-agent
+
+# Create venv and install dependencies with uv
 uv venv
-source .venv/bin/activate
-uv pip install -e .
+source .venv/bin/activate  # or: .venv\Scripts\activate on Windows
+uv sync --extra dev --extra api
+
+# Or use the setup script
+./scripts/setup.sh
 
 # Configure environment
 cp .env.example .env
-# Edit .env with your credentials
+# Edit .env with your credentials (OPENAI_API_KEY, DB_*, etc.)
 ```
 
 ### Environment Variables
+
+Key variables (see `.env.example` for full list):
 
 ```bash
 # Database
@@ -34,10 +41,15 @@ DB_PWD=your_password
 DB_NAME=crewos
 DB_ENCRYPT_KEY=your_encryption_key
 
-# OpenAI
+# LLM (OpenAI or Ollama)
+LLM_PROVIDER=openai
 OPENAI_API_KEY=your_key_here
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_TEMPERATURE=0.1
+
+# Optional: Ollama for local operation
+# LLM_PROVIDER=ollama
+# OLLAMA_BASE_URL=http://localhost:11434
 ```
 
 ## Building the Join Graph
@@ -47,8 +59,8 @@ The join graph is essential for the SQL agent to understand table relationships.
 ### Step 1: Build Raw Graph
 
 ```bash
-cd apps/backend
-python scripts/build_join_graph.py
+cd api-ai-agent
+uv run python scripts/build_join_graph.py
 ```
 
 **Output**: `artifacts/join_graph_raw.json`
@@ -64,8 +76,7 @@ python scripts/build_join_graph.py
 If you have Node.js associations or manual overrides:
 
 ```bash
-# Merge all sources
-python scripts/merge_join_graph.py
+uv run python scripts/merge_join_graph.py
 ```
 
 **Inputs**:
@@ -78,8 +89,7 @@ python scripts/merge_join_graph.py
 ### Step 3: Validate (Recommended)
 
 ```bash
-# LLM validation of relationships
-python scripts/validate_join_graph_llm.py
+uv run python scripts/validate_join_graph_llm.py
 ```
 
 **Output**: `artifacts/join_graph_validated.json`
@@ -92,8 +102,7 @@ python scripts/validate_join_graph_llm.py
 ### Step 4: Build Path Index
 
 ```bash
-# Create path finder index
-python scripts/build_join_graph_paths.py
+uv run python scripts/build_join_graph_paths.py
 ```
 
 **Output**: `artifacts/join_graph_paths.json`
@@ -103,17 +112,37 @@ python scripts/build_join_graph_paths.py
 - Validates path finder functionality
 - Does NOT precompute all paths (efficient!)
 
+## RAG & Vector Store
+
+Before RAG queries work, populate the vector store:
+
+```bash
+# First setup or after document changes
+uv run python scripts/populate_vector_store.py
+
+# Clean slate (fixes corruption)
+uv run python scripts/populate_vector_store.py --reset
+
+# Quick fix
+./scripts/reset_and_populate_rag.sh
+```
+
+Source documents live in `data/manual/`. The server checks vector store status on startup. See [RAG_AND_VECTOR_STORE.md](./specialized/RAG_AND_VECTOR_STORE.md) for details.
+
 ## Running the System
 
 ### Development Server
 
 ```bash
-# Start FastAPI server
-cd apps/backend
-python run_api.py
+cd api-ai-agent
+uv run python scripts/run-dev.py
 ```
 
 Server starts at: `http://localhost:8000`
+
+- API docs: `http://localhost:8000/docs`
+- Health: `http://localhost:8000/health`
+- Chat stream: `POST http://localhost:8000/internal/chat/stream`
 
 ### Testing the API
 
@@ -121,7 +150,7 @@ Server starts at: `http://localhost:8000`
 # Health check
 curl http://localhost:8000/health
 
-# Streaming chat
+# Streaming chat (internal API - used by BFF)
 curl -N -X POST http://localhost:8000/internal/chat/stream \
   -H "Content-Type: application/json" \
   -d '{
@@ -134,17 +163,10 @@ curl -N -X POST http://localhost:8000/internal/chat/stream \
   }'
 ```
 
-### Interactive Testing
+### Production Server
 
 ```bash
-# Test orchestrator directly
-python demo_orchestrator.py
-
-# Test SQL agent
-python test_phase2_sql_agent.py
-
-# Test RAG agent
-python test_phase3_rag.py
+uv run python scripts/run-prod.py
 ```
 
 ## Adding New Secure Views
@@ -164,7 +186,7 @@ FROM newtable;
 
 ### Step 2: Update SECURE_VIEW_MAP
 
-**File**: `src/sql/secure_views.py`
+**File**: `src/config/constants.py`
 
 ```python
 SECURE_VIEW_MAP = {
@@ -176,364 +198,191 @@ SECURE_VIEW_MAP = {
 ### Step 3: Rebuild Join Graph
 
 ```bash
-python scripts/build_join_graph.py
+uv run python scripts/build_join_graph.py
 ```
-
-The join graph will automatically include the new secure view.
 
 ### Step 4: Test
 
 ```bash
-python scripts/test_secure_views.py
+uv run python scripts/test_secure_views.py
 ```
 
 ## Configuring the SQL Agent
 
+Settings are in `src/config/settings.py` and can be overridden via `.env`:
+
 ### Table Selection
 
-The agent selects 3-8 tables per query. To adjust:
+- `sql_max_tables_in_selection_prompt` – Max tables shown to LLM (default: 250)
+- `sql_max_fallback_tables` – Fallback when LLM fails (default: 5)
 
-**File**: `src/agents/sql_graph_agent.py`
-
-```python
-# In _select_tables() prompt
-prompt = f"""
-Select ONLY the minimal set of tables needed to answer the question.
-
-Rules:
-- Return 3 to 8 tables only  # Adjust range here
-- Select from ACTUAL available tables
-...
-"""
-```
+Table selection logic: `src/agents/sql/nodes/table_selector.py`
 
 ### Path Finding
 
-Configure path finder:
+- `sql_confidence_threshold` – Minimum confidence for relationships (default: 0.70)
 
-**File**: `src/agents/sql_graph_agent.py`
+Path finder: `src/sql/graph/path_finder.py`, used in `src/agents/sql/nodes/join_planner.py`
 
-```python
-self.path_finder = JoinPathFinder(
-    self.join_graph["relationships"],
-    confidence_threshold=0.70,  # Adjust threshold
-    max_hops=4  # Adjust max hops
-)
+### SQL Generation & Correction
+
+- `sql_correction_max_attempts` – Max retries on validation/execution failure (default: 3)
+- `max_query_rows` – Max rows returned (default: 100)
+- `sql_sample_rows` – Sample rows per table (default: 1)
+
+### Domain Ontology
+
+- `domain_extraction_enabled` – Enable LLM-based term extraction
+- `domain_registry_path` – Path to `artifacts/domain_registry.json`
+
+See [DOMAIN_ONTOLOGY.md](./specialized/DOMAIN_ONTOLOGY.md).
+
+## Project Structure
+
 ```
-
-### SQL Generation
-
-Configure SQL limits:
-
-**File**: `src/utils/config.py`
-
-```python
-@dataclass
-class Settings:
-    max_query_rows: int = 100  # Max rows returned
-    sql_agent_max_iterations: int = 15  # Max reasoning steps
-    sql_sample_rows: int = 1  # Sample rows per table
+api-ai-agent/
+├── src/
+│   ├── agents/
+│   │   ├── orchestrator/     # Routes to SQL/RAG/General
+│   │   ├── sql/              # SQL agent (modular nodes)
+│   │   ├── rag/              # RAG agent
+│   │   └── general/          # General Q&A agent
+│   ├── api/                  # FastAPI app, routes
+│   ├── config/               # settings.py, constants.py
+│   ├── domain/ontology/      # Domain vocabulary
+│   ├── sql/graph/            # Join graph, path finder
+│   ├── sql/execution/        # SQL execution, secure rewriter
+│   ├── memory/               # Query memory, conversation store
+│   ├── llm/                  # LLM client, embeddings
+│   └── infra/                # Database, vector store
+├── scripts/                  # run-dev, run-prod, build_join_graph, etc.
+├── tests/
+├── artifacts/                # join_graph_*.json, domain_registry.json
+└── data/                     # vector_store, manual/, conversations.db
 ```
 
 ## Extending the System
 
 ### Adding a New Agent
 
-1. **Create agent class**:
+1. Create agent under `src/agents/<name>/` with `agent.py`, `state.py`, etc.
+2. Add routing logic in `src/agents/orchestrator/nodes/classify.py`
+3. Wire the agent in `src/agents/orchestrator/nodes/` routing and finalize logic
 
-```python
-# src/agents/my_agent.py
-from langgraph.graph import StateGraph
+### Adding Domain Terms
 
-class MyAgent:
-    def __init__(self):
-        self.llm = ChatOpenAI(...)
-        self.workflow = self._build()
-    
-    def _build(self):
-        graph = StateGraph(MyState)
-        # Add nodes and edges
-        return graph.compile()
-    
-    def query(self, question: str) -> str:
-        result = self.workflow.invoke({"question": question})
-        return result["answer"]
-```
-
-2. **Integrate into orchestrator**:
-
-```python
-# src/agents/orchestrator_agent.py
-from src.agents.my_agent import MyAgent
-
-class OrchestratorAgent:
-    def __init__(self):
-        self.my_agent = MyAgent()
-        # ... update classification logic
-```
-
-### Adding Custom Tools
-
-1. **Create tool**:
-
-```python
-# src/tools/my_tool.py
-from langchain.tools import BaseTool
-
-class MyTool(BaseTool):
-    name = "my_tool"
-    description = "Does something useful"
-    
-    def _run(self, query: str) -> str:
-        # Tool logic
-        return result
-```
-
-2. **Register in agent**:
-
-```python
-# In agent __init__
-from src.tools.my_tool import MyTool
-
-tools = [MyTool()]
-agent = create_agent(llm, tools)
-```
+Edit `artifacts/domain_registry.json` – no code changes needed. See [DOMAIN_ONTOLOGY.md](./specialized/DOMAIN_ONTOLOGY.md).
 
 ## Troubleshooting
 
 ### SQL Agent Issues
 
-#### Problem: "Table doesn't exist" errors
+#### "Table doesn't exist" errors
 
-**Solution**:
-1. Check join graph includes the table:
-   ```bash
-   cat artifacts/join_graph_merged.json | grep "table_name"
-   ```
+1. Check join graph: `cat artifacts/join_graph_merged.json | grep "table_name"`
 2. Rebuild join graph if missing
-3. Check secure view mapping if it's an encrypted table
+3. Check secure view mapping in `src/config/constants.py`
 
-#### Problem: Slow query performance
+#### Slow query performance
 
-**Solution**:
-1. Reduce table selection (limit to 3-5 tables)
+1. Reduce table selection (limit to 3–5 tables)
 2. Add LIMIT clauses to queries
 3. Check MySQL indexes on join columns
-4. Reduce `sql_sample_rows` in config
+4. Reduce `sql_sample_rows` in settings
 
-#### Problem: Context length exceeded
+#### Context length exceeded
 
-**Solution**:
-1. Reduce `sql_sample_rows` from 3 to 1
-2. Limit tables in context (use `include_tables`)
+1. Reduce `sql_sample_rows` (default: 1)
+2. Lower `sql_max_tables_in_context`
 3. Reduce `max_query_rows`
-4. Upgrade to model with larger context window
+4. Lower `sql_max_relationships_in_prompt`, `sql_max_suggested_paths`
 
 ### Path Finder Issues
 
-#### Problem: Path finder not finding paths
+#### Path finder not finding paths
 
-**Solution**:
-1. Check relationship confidence threshold (default 0.7)
-2. Verify relationships exist in join graph
-3. Increase `max_hops` if needed
-4. Check logs for path finder errors
-
-#### Problem: Path finder too slow
-
-**Solution**:
-1. Path finder should be <100ms - if slower, check:
-   - Number of relationships (should be <2000)
-   - Cache hit rate (should be high for repeated queries)
-   - Graph structure (check for cycles)
+1. Check `sql_confidence_threshold` (default 0.7)
+2. Verify relationships in join graph
+3. Inspect `src/sql/graph/path_finder.py` and `join_planner.py`
 
 ### Secure Views Issues
 
-#### Problem: Views return NULL
+#### Views return NULL
 
-**Solution**:
-1. Check `DB_ENCRYPT_KEY` is set in `.env`
-2. Verify key matches encryption key used in database
-3. Check MySQL session variables are set:
-   ```sql
-   SELECT @aesKey;
-   ```
-4. Restart application to reload environment
+1. Ensure `DB_ENCRYPT_KEY` is set in `.env`
+2. Verify key matches database encryption key
+3. Check MySQL: `SELECT @aesKey;`
+4. Restart application
 
-#### Problem: "secure_xyz doesn't exist" errors
+#### "secure_xyz doesn't exist"
 
-**Solution**:
-1. Verify view exists in MySQL:
-   ```sql
-   SHOW TABLES LIKE 'secure_%';
-   ```
-2. Check `SECURE_VIEW_MAP` includes the table
-3. Rebuild join graph after adding view
+1. Verify view in MySQL: `SHOW TABLES LIKE 'secure_%';`
+2. Add mapping in `src/config/constants.py` (SECURE_VIEW_MAP)
+3. Rebuild join graph
+
+### RAG Issues
+
+#### RAG returns no information
+
+1. Populate vector store: `uv run python scripts/populate_vector_store.py`
+2. Check startup logs for vector store status
+
+#### "Collection does not exist"
+
+```bash
+./scripts/reset_and_populate_rag.sh
+```
 
 ### API Issues
 
-#### Problem: Streaming not working
+#### Streaming not working
 
-**Solution**:
-1. Check SSE headers are set correctly
-2. Verify `X-Accel-Buffering: no` header
-3. Test with `curl -N` flag (no buffering)
-4. Check browser EventSource support
+1. Use `curl -N` (no buffering)
+2. Check SSE headers
+3. Verify EventSource support in client
 
-#### Problem: CORS errors
+#### CORS errors
 
-**Solution**:
-1. Update CORS origins in `src/api/app.py`:
-   ```python
-   allow_origins=["http://localhost:3000"]  # Your frontend URL
-   ```
-2. Restart server after changes
+Update `src/api/app.py` CORS `allow_origins` for your frontend URL.
 
 ## Performance Optimization
 
-### SQL Agent Optimization
+### SQL Agent
 
-1. **Reduce Schema Size**:
-   ```python
-   # In sql_tool.py
-   self.db = SQLDatabase(
-       sample_rows_in_table_info=1,  # Reduce from 3
-       max_string_length=100,  # Truncate long strings
-   )
-   ```
+1. **Reduce schema size**: `sql_sample_rows=1`, `sql_max_columns_in_schema=50`
+2. **Limit tables**: `sql_max_tables_in_context`, `sql_max_relationships_in_prompt`
+3. **Token limits**: `max_context_tokens`, `max_output_tokens`
 
-2. **Limit Table Context**:
-   ```python
-   # Only load relevant tables
-   relevant_tables = analyze_query(user_query)
-   db = SQLDatabase(include_tables=relevant_tables)
-   ```
+### RAG Agent
 
-3. **Cache Common Queries**:
-   ```python
-   from functools import lru_cache
-   
-   @lru_cache(maxsize=100)
-   def cached_query(query_hash: str):
-       # Cache query results
-   ```
-
-### Path Finder Optimization
-
-1. **Precompute Common Paths**:
-   ```python
-   # Precompute employee → workOrder path
-   common_paths = {
-       ("employee", "workOrder"): path_finder.find_shortest_path(...)
-   }
-   ```
-
-2. **Increase Cache Size**:
-   ```python
-   # Path finder caches automatically
-   # Increase if needed by adjusting cache in JoinPathFinder
-   ```
-
-### RAG Agent Optimization
-
-1. **Reduce Chunk Size**:
-   ```python
-   # In chunking_strategies.py
-   chunk_size = 500  # Reduce from 1000
-   ```
-
-2. **Limit Retrieved Chunks**:
-   ```python
-   # In rag_agent.py
-   results = vector_store.search(query, k=5)  # Reduce from 10
-   ```
-
-3. **Enable Embedding Cache**:
-   ```python
-   # Already enabled by default
-   # Check cache hit rate in logs
-   ```
-
-## Monitoring and Debugging
-
-### Enable Debug Logging
-
-```python
-# In src/utils/logger.py or environment
-LOG_LEVEL=DEBUG
-```
-
-### Trace SQL Agent Steps
-
-The SQL agent includes trace decorators:
-
-```python
-def _select_tables(self, state):
-    # Automatically logs:
-    # - Step start/end
-    # - Duration
-    # - Input/output keys
-    # - Errors
-```
-
-### Monitor Token Usage
-
-```python
-from langchain.callbacks import get_openai_callback
-
-with get_openai_callback() as cb:
-    result = agent.query(question)
-    print(f"Tokens: {cb.total_tokens}")
-    print(f"Cost: ${cb.total_cost:.4f}")
-```
-
-### Check Join Graph Stats
-
-```bash
-python -c "
-import json
-with open('artifacts/join_graph_merged.json') as f:
-    g = json.load(f)
-    print(f'Tables: {len(g[\"tables\"])}')
-    print(f'Relationships: {len(g[\"relationships\"])}')
-"
-```
+1. Check embedding cache hits in logs
+2. Reduce chunk size in `src/utils/rag/chunking_strategies.py`
+3. Limit retrieved chunks in RAG agent
 
 ## Testing
 
 ### Unit Tests
 
 ```bash
-# Test secure views
-python scripts/test_secure_views.py
-
-# Test path finder
-python -c "from src.utils.path_finder import JoinPathFinder; ..."
+./scripts/run_tests.sh
 ```
 
-### Integration Tests
+Excludes `test_internal_api.py` (requires running API). For full tests:
 
 ```bash
-# Test SQL agent
-python test_phase2_sql_agent.py
-
-# Test orchestrator
-python test_phase4_orchestrator.py
-
-# Test API
-python test_internal_api.py
+./scripts/run_tests.sh --all
 ```
 
-### Manual Testing
+### Test Secure Views
 
 ```bash
-# Test specific query
-python -c "
-from src.agents.orchestrator_agent import OrchestratorAgent
-agent = OrchestratorAgent()
-result = agent.ask('How many employees are there?')
-print(result['answer'])
-"
+uv run python scripts/test_secure_views.py
+```
+
+### Test Classification
+
+```bash
+uv run python scripts/test_classification.py
 ```
 
 ## Deployment
@@ -546,70 +395,21 @@ print(result['answer'])
 - [ ] Test secure views with real encryption key
 - [ ] Configure CORS for production domain
 - [ ] Set up monitoring and logging
-- [ ] Configure connection pooling appropriately
+- [ ] Populate vector store if using RAG
 - [ ] Test API endpoints
-- [ ] Load test with expected query volume
 
-### Environment-Specific Configs
+### GitLab CI
 
-```bash
-# Development
-OPENAI_MODEL=gpt-4o-mini
-SQL_SAMPLE_ROWS=3
-MAX_QUERY_ROWS=500
+The project includes `.gitlab-ci.yml`:
 
-# Production
-OPENAI_MODEL=gpt-4o-mini
-SQL_SAMPLE_ROWS=1
-MAX_QUERY_ROWS=100
-```
+- **Test stage**: Runs on MRs with `run-tests` label targeting `develop` or `main`
+- **Deploy stage**: SSH deploy to prod on `main` (requires `SSH_PRIVATE_KEY` CI variable)
 
-## Common Patterns
+## Specialized Documentation
 
-### Pattern 1: Multi-Hop Join Discovery
-
-The path finder automatically discovers paths like:
-```
-employee → workTime → workOrder → customer
-```
-
-No manual configuration needed - just ensure relationships are in join graph.
-
-### Pattern 2: Secure View Rewriting
-
-Always use logical table names in prompts:
-```python
-# ✅ Good
-prompt = "Use table names: employee, workOrder, inspections"
-
-# ❌ Bad
-prompt = "Use secure_employee, secure_workorder"
-```
-
-System handles rewriting automatically.
-
-### Pattern 3: Error Handling
-
-```python
-try:
-    result = sql_agent.query(question)
-except ValueError as e:
-    # Table validation error
-    logger.error(f"Invalid table: {e}")
-except Exception as e:
-    # Other errors
-    logger.error(f"Query failed: {e}")
-```
-
-## Best Practices
-
-1. **Always use LIMIT clauses** in generated SQL
-2. **Validate tables exist** before execution
-3. **Cache embeddings** to reduce costs
-4. **Monitor token usage** to avoid overages
-5. **Rebuild join graph** after schema changes
-6. **Test secure views** after adding new encrypted tables
-7. **Use validated join graph** in production
-8. **Log all queries** for debugging
-9. **Set appropriate timeouts** for long-running queries
-10. **Use connection pooling** for performance
+- [SQL Agent & Join Graph](./specialized/SQL_AGENT_AND_JOIN_GRAPH.md)
+- [Secure Views & Database](./specialized/SECURE_VIEWS_AND_DATABASE.md)
+- [Domain Ontology](./specialized/DOMAIN_ONTOLOGY.md)
+- [RAG & Vector Store](./specialized/RAG_AND_VECTOR_STORE.md)
+- [Follow-up Memory](./specialized/FOLLOWUP_QUESTIONS_MEMORY.md)
+- [Integration & Reference](./specialized/INTEGRATION_AND_REFERENCE.md)
