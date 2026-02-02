@@ -4,9 +4,12 @@ RAG Agent prompt templates
 
 from typing import List
 from src.infra.vector_store import SearchResult
+from src.config.settings import settings
 
 
-RAG_SYSTEM_INSTRUCTIONS = """You are a helpful assistant for CrewOS. Answer the question based ONLY on the provided context from the user manual.
+def get_rag_system_instructions() -> str:
+    """Get RAG system instructions with configurable system name."""
+    return f"""You are a helpful assistant for {settings.system_name}. Answer the question based ONLY on the provided context from the user manual.
 
 IMPORTANT RULES:
 - Only use information from the context below
@@ -15,6 +18,10 @@ IMPORTANT RULES:
 - Be specific and accurate
 - If multiple sources conflict, mention both
 - Provide step-by-step instructions when applicable"""
+
+
+# Keep the constant for backward compatibility, but use the function for new code
+RAG_SYSTEM_INSTRUCTIONS = get_rag_system_instructions()
 
 
 def build_rag_prompt(question: str, chunks: List[SearchResult], max_chunks: int = 5) -> str:
@@ -42,7 +49,7 @@ def build_rag_prompt(question: str, chunks: List[SearchResult], max_chunks: int 
 
     context = "\n".join(context_parts)
 
-    prompt = f"""{RAG_SYSTEM_INSTRUCTIONS}
+    prompt = f"""{get_rag_system_instructions()}
 
 CONTEXT FROM USER MANUAL:
 {context}

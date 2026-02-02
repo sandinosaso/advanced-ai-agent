@@ -17,6 +17,11 @@ from src.agents.sql.planning import (
     parse_join_path_steps,
     get_excluded_columns,
 )
+from src.agents.sql.prompt_helpers import (
+    build_name_label_examples,
+    build_bridge_table_example,
+    build_column_mismatch_example,
+)
 
 
 def _build_domain_filter_instructions(state: SQLGraphState) -> str:
@@ -160,6 +165,11 @@ def generate_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
         )
 
     join_path_steps = parse_join_path_steps(state.get("join_plan", ""))
+    
+    # Build dynamic examples from join graph
+    name_label_examples = build_name_label_examples(ctx.join_graph, max_examples=4)
+    bridge_example = build_bridge_table_example(ctx.join_graph)
+    column_mismatch_example = build_column_mismatch_example(ctx.join_graph)
 
     followup_where_clause = ""
     if state.get("is_followup") and state.get("referenced_ids"):
@@ -182,28 +192,36 @@ def generate_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
             real_values = [v for v in values if _is_real_id(v)][:10]
             if not real_values:
                 continue
-            table_name = id_field.replace("Id", "").replace("id", "")
+            
+            # Extract table name from id_field (e.g., "inspection_id" -> "inspection", "inspectionId" -> "inspection")
+            if id_field.endswith("_id"):
+                table_name = id_field[:-3]  # Remove "_id" suffix
+                column_name = "id"
+            elif id_field.endswith("Id") and id_field != "id":
+                table_name = id_field[:-2]  # Remove "Id" suffix
+                column_name = "id"
+            else:
+                # If it doesn't follow standard pattern, use as-is
+                table_name = id_field
+                column_name = id_field
+            
             if not table_name:
                 continue
-            column_name = (
-                "id"
-                if (
-                    id_field.endswith("Id")
-                    and id_field != "id"
-                    and table_name
-                    and id_field == table_name + "Id"
-                )
-                else id_field
-            )
-            if table_name in all_tables or any(
-                table_name.lower() == t.lower() for t in all_tables
-            ):
+            
+            # Check if table exists in all_tables (case-insensitive)
+            matching_table = None
+            for t in all_tables:
+                if t.lower() == table_name.lower():
+                    matching_table = t
+                    break
+            
+            if matching_table:
                 if len(real_values) == 1:
-                    where_conditions.append(f"{table_name}.{column_name} = '{real_values[0]}'")
+                    where_conditions.append(f"{matching_table}.{column_name} = '{real_values[0]}'")
                 else:
                     values_str = "', '".join(str(v) for v in real_values)
                     where_conditions.append(
-                        f"{table_name}.{column_name} IN ('{values_str}')"
+                        f"{matching_table}.{column_name} IN ('{values_str}')"
                     )
 
         if where_conditions:
@@ -229,18 +247,12 @@ CRITICAL RULES:
 - Follow the JOIN_PATH EXACTLY step by step - do NOT skip any tables or steps
 - Include ALL tables shown above in your FROM/JOIN clauses
 - Do NOT try to join tables directly if JOIN_PATH shows they require a bridge table
-- Do NOT assume columns exist in the wrong table (e.g., firstName/lastName are in employee table, NOT in crew table)
+{column_mismatch_example}
 - Use LIMIT {settings.max_query_rows} unless it's an aggregate COUNT/SUM/etc
-- Use logical table names (workOrder not secure_workorder)
+- Use logical table names (not secure_* prefixed versions)
 - DO NOT add secure_ prefix - the system handles that automatically
 
-IMPORTANT FOR NAME/LABEL REQUESTS:
-- If the question asks for "names" or "labels" instead of IDs, select the appropriate name/label columns:
-  * serviceLocation: use "name" column for location name
-  * employee: use "firstName" and "lastName" for employee name (can use CONCAT(firstName, ' ', lastName) AS employeeName)
-  * customer: use "name" column for customer name
-  * crew: use "name" column for crew name
-- When replacing an ID with a name, make sure to SELECT the name column(s) and JOIN to the table that has the name
+{name_label_examples if name_label_examples else ""}
 {followup_where_clause}
 Question: {state['question']}
 
@@ -249,8 +261,7 @@ Join plan (follow this EXACTLY, step by step):
 
 {"EXPLICIT JOIN STEPS (follow these in order):" + chr(10) + chr(10).join(f"{i+1}. {step}" for i, step in enumerate(join_path_steps)) if join_path_steps else ""}
 
-IMPORTANT: If JOIN_PATH shows multiple steps (e.g., crew.createdBy = user.id, then user.employeeId = employee.id),
-you MUST include BOTH joins in your SQL. Do NOT skip the bridge table (user) and try to join crew directly to employee.
+IMPORTANT: {bridge_example} Do NOT skip bridge tables and try to join tables directly.
 {_build_domain_filter_instructions(state)}
 Return ONLY the SQL query, nothing else.
 """

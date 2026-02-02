@@ -17,6 +17,7 @@ from src.agents.sql.planning import (
     get_exclude_bridge_patterns,
     get_excluded_columns,
 )
+from src.agents.sql.prompt_helpers import build_bridge_table_example
 
 
 def filter_relationships_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
@@ -149,32 +150,6 @@ def plan_joins_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
 
     rels_display = allowed_rels[:settings.sql_max_relationships_display]
 
-    crew_to_employee_path = None
-    for path_info in suggested_paths:
-        if (path_info["from"] == "crew" and path_info["to"] == "employee") or (
-            path_info["from"] == "employee" and path_info["to"] == "crew"
-        ):
-            crew_to_employee_path = path_info
-            break
-
-    relevant_path_section = ""
-    if crew_to_employee_path:
-        relevant_path_section = f"""
-{"=" * 70}
-MOST RELEVANT PATH FOR THIS QUESTION:
-{"=" * 70}
-To connect crew to employee, use this EXACT path from the suggestions above:
-
-  Path: {crew_to_employee_path['path']}
-  Tables needed: {', '.join(crew_to_employee_path['tables_used'])}
-
-  JOIN_PATH steps (copy these EXACTLY):
-{chr(10).join(f"  - {step}" for step in crew_to_employee_path['join_steps'])}
-
-  DO NOT create your own path - use the one above!
-{"=" * 70}
-"""
-
     domain_filter_hints = ""
     domain_resolutions = state.get("domain_resolutions", [])
     if domain_resolutions:
@@ -202,6 +177,8 @@ To connect crew to employee, use this EXACT path from the suggestions above:
                 domain_filter_hints += "Include all tables in this chain; do not skip to a shorter path.\n"
                 break
 
+    bridge_example = build_bridge_table_example(ctx.join_graph)
+
     prompt = f"""
 You are planning SQL joins. You MUST ONLY use the allowed relationships.
 
@@ -216,8 +193,6 @@ Suggested optimal paths (from graph algorithm):
 These paths are computed by the graph algorithm and include ALL bridge tables needed.
 {json.dumps(suggested_paths, indent=2) if suggested_paths else "No paths found"}
 
-{relevant_path_section}
-
 Direct and transitive relationships available (for reference only - prefer suggested paths):
 {json.dumps(rels_display[:settings.sql_max_relationships_in_prompt], indent=2)}
 {domain_filter_hints}
@@ -228,8 +203,7 @@ Task:
 - Only construct your own path if no suggested path exists
 - Prefer shorter paths (fewer hops) when multiple options exist, unless a PREFERRED JOIN CHAIN is given
 - Use cardinality to prefer safer joins (N:1 / 1:1 over N:N)
-- CRITICAL: If connecting two tables requires a bridge table (like 'user' connecting 'crew' to 'employee'),
-  you MUST include ALL intermediate tables in the JOIN_PATH. Do NOT skip bridge tables.
+- CRITICAL: {bridge_example} Do NOT skip bridge tables.
 - If no allowed join path exists, say "NO_JOIN_PATH".
 
 Question: {state['question']}

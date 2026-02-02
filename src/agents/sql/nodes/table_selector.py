@@ -11,6 +11,7 @@ from src.agents.sql.utils import trace_step
 from src.config.settings import settings
 from src.domain.ontology.formatter import format_domain_context_for_table_selection
 from src.memory.query_memory import QueryResultMemory
+from src.agents.sql.prompt_helpers import get_most_connected_tables
 
 
 def select_tables_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
@@ -106,19 +107,15 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
                 logger.info(f"Added domain-required table: {table}")
     except Exception as e:
         logger.warning(f"Failed to parse table selection: {e}. Raw output: {raw}")
-        q = state["question"].lower()
-        fallback = []
-        if "work" in q:
-            for t in ["employee", "workOrder", "workTime", "crew", "employeeCrew"]:
-                if t in ctx.join_graph["tables"]:
-                    fallback.append(t)
-        elif "employee" in q:
-            if "employee" in ctx.join_graph["tables"]:
-                fallback.append("employee")
+        
+        # Use most connected tables as fallback instead of keyword matching
+        fallback = get_most_connected_tables(ctx.join_graph, n=settings.sql_max_fallback_tables)
+        
         if not fallback:
             fallback = list(all_tables[:settings.sql_max_fallback_tables])
+        
         tables = fallback
-        logger.info(f"Fallback selected tables: {tables}")
+        logger.info(f"Fallback selected tables (most connected): {tables}")
 
     logger.info(f"Selected tables: {tables}")
     state["tables"] = tables

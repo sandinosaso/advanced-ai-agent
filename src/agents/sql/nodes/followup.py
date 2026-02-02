@@ -10,6 +10,7 @@ from src.agents.sql.context import SQLContext
 from src.agents.sql.utils import trace_step, entity_to_id_field
 from src.config.settings import settings
 from src.memory.query_memory import QueryResultMemory
+from src.agents.sql.prompt_helpers import get_sample_table_names
 
 
 def detect_followup_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
@@ -55,6 +56,16 @@ def detect_followup_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState
         state["referenced_entity"] = None
         return state
 
+    # Get sample entity names from join graph for dynamic examples
+    sample_entities = get_sample_table_names(ctx.join_graph, n=3)
+    entity_examples = "/".join(sample_entities) if sample_entities else "entity1/entity2/entity3"
+    
+    # Build ID field examples dynamically
+    id_examples = []
+    for entity in sample_entities[:2]:
+        id_examples.append(f"{entity}Id")
+    id_field_examples = ", ".join(id_examples) if id_examples else "entityId, relatedEntityId"
+
     prompt = f"""Analyze if this question is a follow-up referencing previous query results.
 
 {context}
@@ -66,18 +77,18 @@ Determine if the current question references the previous results above.
 
 Look for:
 - Reference words: "that", "those", "the same", "previous", "from above", "for it", "for them"
-- Implicit references: "show me the questions" (implies "for that inspection")
+- Implicit references: "show me the details" (implies "for that entity from previous query")
 - Context-dependent questions that don't make sense without previous results
 
 Respond with ONLY a JSON object (no markdown, no explanation):
 {{
   "is_followup": true/false,
   "reasoning": "brief explanation",
-  "referenced_entity": "inspection/workOrder/employee/etc or null",
-  "referenced_ids": {{"inspectionId": ["<field name from Key IDs above>"], ...}} or null
+  "referenced_entity": "{entity_examples}/etc or null",
+  "referenced_ids": {{"{id_field_examples}": ["<field name from Key IDs above>"], ...}} or null
 }}
 
-If is_followup=true: set referenced_ids to the KEY NAMES only (e.g. inspectionId, workOrderId) that match the entity being referenced. Use the exact key names from "Key IDs found" above - the system will substitute the actual ID values automatically. Do NOT invent placeholder values like id1 or [SPECIFIC_INSPECTION_ID].
+If is_followup=true: set referenced_ids to the KEY NAMES only (e.g. {id_field_examples}) that match the entity being referenced. Use the exact key names from "Key IDs found" above - the system will substitute the actual ID values automatically. Do NOT invent placeholder values like id1 or [SPECIFIC_ID].
 If is_followup=false, set referenced_entity and referenced_ids to null.
 """
 

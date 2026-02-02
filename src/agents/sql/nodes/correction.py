@@ -11,6 +11,7 @@ from src.agents.sql.context import SQLContext
 from src.agents.sql.utils import trace_step
 from src.config.settings import settings
 from src.sql.execution.secure_rewriter import rewrite_secure_tables, from_secure_view
+from src.agents.sql.prompt_helpers import build_duplicate_join_example
 
 
 def correct_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
@@ -88,24 +89,13 @@ def correct_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     duplicate_table_instructions = ""
 
     if is_duplicate_table_error:
-        duplicate_table_instructions = """
+        duplicate_example = build_duplicate_join_example(ctx.join_graph)
+        duplicate_table_instructions = f"""
 CRITICAL: DUPLICATE TABLE/ALIAS ERROR DETECTED
 
 The error "Not unique table/alias" means you are joining the same table multiple times.
 
-COMMON CAUSES:
-1. Same table joined twice with different conditions:
-   BAD:
-   JOIN workOrder ON workOrder.customerId = customer.id
-   JOIN workOrder ON workOrder.customerLocationId = customerLocation.id
-
-   GOOD (pick the most direct path):
-   JOIN workOrder ON workOrder.customerLocationId = customerLocation.id
-
-2. Trying to use multiple join paths to the same table:
-   - Choose the SHORTEST path with HIGHEST confidence
-   - Use inspectionTemplateWorkOrder.workOrderId = workOrder.id (direct FK, conf: 1.0)
-   - NOT customerLocation → customer → workOrder (indirect, longer path)
+{duplicate_example}
 
 FIX STRATEGY:
 - Identify which table appears in multiple JOIN clauses

@@ -8,6 +8,10 @@ from src.agents.sql.state import SQLGraphState
 from src.agents.sql.context import SQLContext
 from src.agents.sql.utils import trace_step
 from src.config.settings import settings
+from src.agents.sql.prompt_helpers import (
+    get_domain_entities_with_atomic_signals,
+    get_entity_id_field_map,
+)
 
 
 def extract_domain_terms_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
@@ -23,24 +27,32 @@ def extract_domain_terms_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraph
     question = state["question"]
 
     # For follow-up questions, pass implied atomic signals from context.
-    # The LLM often returns [] for terse follow-ups like "Now for that inspections I want
-    # all questions and answers", but we know from follow-up detection that the entity
-    # is "inspection". This allows inspection_questions_and_answers to be resolved,
-    # which injects the correct tables (inspectionQuestionGroup, etc.) into table selection.
+    # The LLM often returns [] for terse follow-ups, but we know from follow-up detection
+    # what entity is referenced. This allows compound terms to be resolved correctly.
     implied_signals: list[str] = []
+    
+    # Get entities that require atomic signals from domain registry
+    atomic_signal_entities = get_domain_entities_with_atomic_signals(ctx.domain_ontology)
+    
     if state.get("is_followup") and state.get("referenced_entity"):
         entity = state["referenced_entity"]
-        if entity and entity.lower() in ("inspection", "safety", "service"):
+        if entity and entity.lower() in atomic_signal_entities:
             implied_signals = [entity.lower()]
     elif state.get("is_followup") and state.get("referenced_ids"):
         # Infer entity from referenced_ids when referenced_entity not set
         rid = state["referenced_ids"]
-        if "inspectionId" in rid:
-            implied_signals = ["inspection"]
-        elif "safetyId" in rid:
-            implied_signals = ["safety"]
-        elif "serviceId" in rid:
-            implied_signals = ["service"]
+        entity_id_map = get_entity_id_field_map(ctx.domain_ontology)
+        
+        # Build reverse map: idField -> entity
+        id_to_entity = {v: k for k, v in entity_id_map.items()}
+        
+        # Check which ID fields are present and map to entities
+        for id_field in rid.keys():
+            if id_field in id_to_entity:
+                entity = id_to_entity[id_field]
+                if entity in atomic_signal_entities:
+                    implied_signals = [entity]
+                    break
 
     try:
         domain_terms = ctx.domain_ontology.extract_domain_terms(

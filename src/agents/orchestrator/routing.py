@@ -10,6 +10,62 @@ from langchain_core.messages import HumanMessage, AIMessage
 from src.agents.orchestrator.context import OrchestratorContext
 
 
+def _build_sql_examples(business_entities: List[str]) -> str:
+    """Build dynamic SQL classification examples from business entities."""
+    if not business_entities or len(business_entities) < 2:
+        return """- "How many active records are there?"
+- "Which items are currently in progress?"
+- "Show me the details for items that are active"
+- "What types are available in the system?"
+- "List all names"
+- "Do the same but show the name instead of the ID" (if previous query was SQL)"""
+    
+    # Use first few entities to build examples
+    entity1 = business_entities[0]
+    entity2 = business_entities[1] if len(business_entities) > 1 else business_entities[0]
+    entity3 = business_entities[2] if len(business_entities) > 2 else business_entities[0]
+    
+    return f"""- "How many active {entity1} are there?"
+- "How many {entity2} are there?"
+- "Which {entity3} are currently in progress?"
+- "Show me the {entity1} details for items that are active"
+- "What are the {entity2} types available?" ← IMPORTANT: Asking about entity types = SQL
+- "List the {entity1} available in the system" ← IMPORTANT: "available in system" = data query
+- "What {entity3} exist?" ← Queries existing business data
+- "Show me all {entity2} types" ← Lists business configuration data
+- "List all {entity1} names" ← Queries business entities
+- "Do the same but show the name instead of the ID" (if previous query was SQL)
+- "Show me the same data with {entity2} names" (if previous query was SQL)
+- "Add the {entity3} to the previous result" (if previous query was SQL)"""
+
+
+def _build_rag_examples(business_entities: List[str]) -> str:
+    """Build dynamic RAG classification examples from business entities."""
+    if not business_entities or len(business_entities) < 2:
+        return """- "How do I create a new record?"
+- "How do I add an item?"
+- "What are the steps to complete a task?"
+- "How do I view details?"
+- "How do I filter items?"
+- "What permissions are needed to access the module?"
+- "How do I add a related record?"
+- "How do I assign an item to another?\""""
+    
+    # Use first few entities to build examples
+    entity1 = business_entities[0]
+    entity2 = business_entities[1] if len(business_entities) > 1 else business_entities[0]
+    entity3 = business_entities[2] if len(business_entities) > 2 else business_entities[0]
+    
+    return f"""- "How do I create a {entity1}?"
+- "How do I add a {entity2}?"
+- "What are the steps to complete a {entity3}?"
+- "How do I view {entity1} details?"
+- "How do I filter {entity2}?"
+- "What permissions are needed to access the {entity1} module?"
+- "How do I add a {entity2}?"
+- "How do I assign a {entity3} to a {entity1}?\""""
+
+
 def classify_question(
     question: str,
     messages: Sequence,
@@ -24,6 +80,11 @@ def classify_question(
     - GENERAL: General questions that can be answered directly by LLM
     """
     business_entities = ctx.get_business_entities()
+    
+    # Generate dynamic examples from business entities
+    sql_examples = _build_sql_examples(business_entities)
+    rag_examples = _build_rag_examples(business_entities)
+    entity_list = ", ".join(business_entities[:10]) if business_entities else "entities"
 
     # Build context from recent messages to understand follow-ups
     recent_context = ""
@@ -68,20 +129,7 @@ Examples of business-related questions → SQL:
 - Follow-up questions that modify/refine a previous SQL query
 
 SQL Examples:
-- "How many active employees there are?"
-- "How many equipment/locations there are?"
-- "Which work orders are currently in progress?"
-- "Show me the work order details for the work orders that are currently in progress"
-- "Give me the name of the lead and employee names for the work orders that are currently in progress"
-- "What are the asset types available?" ← IMPORTANT: Asking about business entity types = SQL
-- "List the asset types available in the system" ← IMPORTANT: "available in system" = data query
-- "What inspection templates exist?" ← Queries existing business data
-- "Show me all expense types" ← Lists business configuration data
-- "What service locations do we have?" ← Queries business locations
-- "List all crew names" ← Queries business entities
-- "Do the same but show the location Name instead of the location Id" (if previous query was SQL)
-- "Show me the same data but with employee names" (if previous query was SQL)
-- "Add the service location to the previous result" (if previous query was SQL)
+{sql_examples}
 
 **RAG** - ONLY if question asks about:
 - System usage, how-to questions, feature explanations
@@ -92,14 +140,7 @@ SQL Examples:
 - MUST be answerable from user manual/system documentation
 
 RAG Examples:
-- "How do I create a work order?"
-- "How do I add a customer?"
-- "What are the steps to complete an inspection?"
-- "How do I view customer details?"
-- "How do I filter work orders?"
-- "What permissions are needed to access the core module?"
-- "How do I add a customer location?"
-- "How do I assign a crew to a work order?"
+{rag_examples}
 
 **GENERAL** - Use for:
 - General knowledge questions
@@ -117,7 +158,7 @@ GENERAL Examples:
 - "Tell me a joke"
 
 IMPORTANT RULES:
-1. **CRITICAL**: If the question mentions ANY business entities (asset, crew, employee, workOrder, inspection, quote, service, expense, etc.) → SQL
+1. **CRITICAL**: If the question mentions ANY business entities ({entity_list}) → SQL
 2. **CRITICAL**: Questions like "What [entity] types are available/exist?" or "List [entities]" → SQL (not GENERAL)
 3. If asking for CURRENT DATA or STATISTICS from the database → SQL
 4. If asking about HOW TO USE THE SYSTEM or SYSTEM FEATURES from user manual → RAG
