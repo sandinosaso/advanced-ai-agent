@@ -8,20 +8,23 @@ This document describes the architecture of the Advanced AI Agent system - an in
 
 ### Internal API Service
 
-The system exposes a FastAPI internal service following the Backend-for-Frontend (BFF) pattern.
+The system exposes a FastAPI internal service following the Backend-for-Frontend (BFF) pattern. The Node.js BFF sends the user message to the internal API; the Orchestrator Agent processes it and **streams** the response back (Server-Sent Events) through the same path.
 
 **Location**: `src/api/`
 
-**Architecture**:
+**Architecture** (request → Orchestrator; response stream ← Orchestrator):
 ```mermaid
 graph LR
-    Browser[Browser] --> NodeJS[Node.js BFF<br/>Auth, UX]
-    NodeJS --> FastAPI[FastAPI<br/>Internal API]
-    FastAPI --> Orchestrator[Orchestrator Agent]
+    Browser[Browser] <--> NodeJS[Node.js BFF<br/>Auth, UX]
+    NodeJS <--> FastAPI[FastAPI<br/>Internal API]
+    FastAPI <--> Orchestrator[Orchestrator Agent]
     
     style NodeJS fill:#4A90E2
     style FastAPI fill:#50C878
+    style Orchestrator fill:#FFA700
 ```
+
+**Flow**: Request flows Browser → Node.js → FastAPI → Orchestrator. The response is **streamed** back (SSE) in the reverse direction: Orchestrator → FastAPI → Node.js → Browser, so the client receives tokens and events as they are produced.
 
 ### Endpoint
 
@@ -84,8 +87,11 @@ graph TB
     JoinPlanner --> DisplayAttrs[(Display Attributes<br/>display_attributes_registry.json)]
     DisplayAttrs --> SQLGen[SQL Generator]
     SQLGen --> SecureRewrite[Secure View Rewriter]
-    SecureRewrite --> Validator[Table Validator]
-    Validator --> Executor[SQL Executor]
+    SecureRewrite --> Validator[Pre-Validation<br/>Table/Column Validator]
+    Validator -->|Valid| Executor[SQL Executor]
+    Validator -->|Invalid| Correction[SQL Correction]
+    Correction --> Validator
+    Executor -->|Error| Correction
     Executor --> MySQL[(MySQL Database<br/>122 Tables)]
     
     RAGAgent --> VectorStore[(ChromaDB<br/>Vector Store)]
@@ -109,6 +115,8 @@ graph TB
     style DomainRegistry fill:#FFA700
     style JoinGraph fill:#E8E8E8
     style DisplayAttrs fill:#FFE4B5
+    style Validator fill:#4A90E2
+    style Correction fill:#FF1493
 ```
 
 ## Core Agents
@@ -1293,7 +1301,7 @@ graph LR
 
 **Why**: Separates AI logic from frontend concerns.
 
-**How**: BFF pattern - Node.js handles auth/UX, Python handles agents.
+**How**: BFF pattern - Node.js handles auth and maps SSE events for the frontend; Python handles agents.
 
 **Benefit**: Clean separation, reusable, secure.
 
