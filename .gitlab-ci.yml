@@ -38,7 +38,5 @@ deploy:prod:
     - eval $(ssh-agent -s)
     - ssh-add <(echo "$SSH_PRIVATE_KEY")
     - ssh -o StrictHostKeyChecking=no -t ubuntu@54.90.67.217 "/home/ubuntu/deploy.sh"
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      when: on_success
-    - when: never
+  only:
+    - main
