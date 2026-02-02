@@ -78,9 +78,11 @@ graph TB
     SQLAgent --> DomainOntology[Domain Ontology<br/>Extract Business Terms]
     DomainOntology --> DomainRegistry[(Domain Registry<br/>domain_registry.json)]
     DomainOntology --> TableSelector[Table Selector]
+    TableSelector --> JoinGraph[(Join Graph<br/>join_graph_merged.json)]
     TableSelector --> PathFinder[Path Finder<br/>Dijkstra Algorithm]
     PathFinder --> JoinPlanner[Join Planner]
-    JoinPlanner --> SQLGen[SQL Generator]
+    JoinPlanner --> DisplayAttrs[(Display Attributes<br/>display_attributes_registry.json)]
+    DisplayAttrs --> SQLGen[SQL Generator]
     SQLGen --> SecureRewrite[Secure View Rewriter]
     SecureRewrite --> Validator[Table Validator]
     Validator --> Executor[SQL Executor]
@@ -105,6 +107,8 @@ graph TB
     style Checkpoint fill:#50C878
     style DomainOntology fill:#FFA700
     style DomainRegistry fill:#FFA700
+    style JoinGraph fill:#E8E8E8
+    style DisplayAttrs fill:#FFE4B5
 ```
 
 ## Core Agents
@@ -113,7 +117,7 @@ graph TB
 
 The main entry point that routes questions to appropriate agents. Maintains conversation memory using LangGraph checkpointing.
 
-**Location**: `src/agents/orchestrator_agent.py`
+**Location**: `src/agents/orchestrator/agent.py`
 
 **Workflow**:
 ```mermaid
@@ -162,25 +166,29 @@ class AgentState(TypedDict):
 
 Advanced SQL agent that uses graph algorithms to discover optimal join paths.
 
-**Location**: `src/agents/sql_graph_agent.py`
+**Location**: `src/agents/sql/agent.py`
 
-**Workflow**:
+**Workflow** (Node Implementation):
+
+Each workflow step is implemented as a separate node in `src/agents/sql/nodes/`:
+
 ```mermaid
 graph TB
-    A[Question] --> A1[Domain Ontology<br/>Extract & Resolve Terms]
-    A1 --> B[Table Selector<br/>with Domain Context]
+    A[Question] --> A1[domain.py<br/>Domain Ontology<br/>Extract & Resolve Terms]
+    A1 --> B[table_selector.py<br/>Table Selector<br/>with Domain Context]
     B --> C[Filter Relationships]
-    C --> D[Path Finder<br/>Dijkstra]
-    D --> E[Join Planner]
-    E --> F[SQL Generator<br/>with Domain Filters]
+    C --> D[Path Finder<br/>Dijkstra Algorithm]
+    D --> E[join_planner.py<br/>Join Planner]
+    E --> F[sql_generator.py<br/>SQL Generator<br/>with Domain Filters]
     F --> G[Secure Rewriter]
-    G --> H[Pre-Validation]
-    H -->|Valid| I[Executor]
-    H -->|Invalid| J[Correction Agent<br/>Auto-Fix SQL]
+    G --> H[validator.py<br/>Pre-Validation]
+    H -->|Valid| I[executor.py<br/>SQL Executor]
+    H -->|Invalid| J[correction.py<br/>Correction Agent<br/>Auto-Fix SQL]
     J -->|Corrected SQL| H
-    I -->|Success| K[Result]
+    I -->|Success| K[finalize.py<br/>Finalize Result]
     I -->|Error| J
     I -->|Empty| F
+    K --> L[followup.py<br/>Generate Followups]
     
     note1["<small>⚠️ On error, SQL Graph Agent<br/>calls Correction Agent<br/>to auto-fix query</small>"] -.-> J
     
@@ -198,6 +206,8 @@ graph TB
     style G fill:#FF6B6B
     style H fill:#4A90E2
     style J fill:#FF1493
+    style K fill:#50C878
+    style L fill:#9B59B6
     style A2 fill:#F5F5F5
     style B2 fill:#F5F5F5
     style C2 fill:#F5F5F5
@@ -242,7 +252,13 @@ class SQLGraphState(TypedDict):
 
 The Domain Ontology system bridges the gap between business terminology and database schema, enabling natural language queries to be accurately mapped to SQL constructs.
 
-**Location**: `src/utils/domain_ontology.py`, `artifacts/domain_registry.json`
+**Location**: 
+- `src/domain/ontology/`
+  - `extractor.py` - Term extraction from questions
+  - `resolver.py` - Term resolution to schema
+  - `formatter.py` - Context formatting for prompts
+  - `models.py` - Domain models and types
+- `artifacts/domain_registry.json` (registry file)
 
 **Purpose**: Maps business concepts (like "crane", "action item", "inspection questions") to specific database tables, columns, and filter conditions.
 
@@ -480,11 +496,150 @@ WHERE LOWER(a.name) LIKE '%forklift%'
 4. **Context-Aware Resolution**: Choose resolution strategy based on query context
 5. **Embedding-Based Matching**: Use semantic similarity for fuzzy term matching
 
+### Display Attributes System
+
+The Display Attributes system optimizes SQL queries by defining which columns to retrieve and how to present them to users.
+
+**Location**: `src/domain/display_attributes/`, `artifacts/display_attributes_registry.json`
+
+**Purpose**: Reduces token usage and improves clarity by selecting only relevant columns for display.
+
+#### Architecture
+
+```mermaid
+graph TB
+    SQLGen[SQL Generation] --> Registry[(Display Attributes<br/>display_attributes_registry.json)]
+    Registry --> SelectCols[Select Display Columns]
+    SelectCols --> BuildSQL[Build SELECT Statement]
+    BuildSQL --> Query[Optimized SQL Query]
+    
+    Query --> Results[Query Results]
+    Results --> Format[Format with Primary Labels]
+    Format --> Response[Human-Readable Response]
+    
+    style Registry fill:#FFE4B5
+    style SelectCols fill:#FFE4B5
+    style Format fill:#FFE4B5
+```
+
+#### Registry Structure
+
+The display attributes registry (`artifacts/display_attributes_registry.json`) defines:
+
+```json
+{
+  "version": 1,
+  "description": "Display attributes for tables",
+  "tables": {
+    "asset": {
+      "display_columns": ["id", "name", "modelNumber", "serialNumber"],
+      "primary_label": ["name"]
+    },
+    "employee": {
+      "display_columns": ["id", "firstName", "lastName", "email"],
+      "primary_label": ["firstName", "lastName"]
+    },
+    "workOrder": {
+      "display_columns": ["id", "title", "status", "customerId"],
+      "primary_label": ["title"]
+    }
+  }
+}
+```
+
+#### Field Definitions
+
+**Display Columns**:
+- Columns to retrieve in SQL `SELECT` statements
+- Typically 3-5 most relevant columns per table
+- Reduces token usage by excluding verbose/unnecessary columns
+- Improves query performance
+
+**Primary Label**:
+- Columns that form a human-readable identifier
+- Used for presenting results to users
+- Example: "John Doe" instead of employee ID "12345"
+- Can be multiple columns (e.g., firstName + lastName)
+
+#### Integration with SQL Agent
+
+**Step 1: Table Selection**
+- Agent selects relevant tables (e.g., `asset`, `inspection`)
+
+**Step 2: Column Selection (with Display Attributes)**
+```python
+# Without display attributes
+SELECT asset.*, inspection.*  # 50+ columns
+
+# With display attributes
+SELECT 
+  asset.id, asset.name, asset.modelNumber, asset.serialNumber,
+  inspection.id, inspection.date, inspection.result
+```
+
+**Step 3: Result Formatting**
+```python
+# Results use primary_label for readability
+{
+  "asset": "Crane #42",  # Uses asset.name (primary_label)
+  "inspector": "John Doe",  # Uses firstName + lastName (primary_label)
+  "status": "Passed"
+}
+```
+
+#### Benefits
+
+1. **Token Reduction**: Fewer columns → smaller prompts and responses
+2. **Performance**: Less data transferred from database
+3. **Clarity**: Only relevant information shown to users
+4. **Consistency**: Standard column sets across all queries for same table
+5. **Maintainability**: Centralized column definitions (no hardcoding in prompts)
+
+#### Configuration
+
+**Environment Variables**: None (loaded directly from JSON file)
+
+**Location**: `artifacts/display_attributes_registry.json`
+
+#### Usage Example
+
+**Query**: "Show me all cranes"
+
+**Without Display Attributes**:
+```sql
+SELECT asset.*  -- Returns 30+ columns including verbose fields
+FROM asset
+WHERE LOWER(asset.name) LIKE '%crane%'
+```
+
+**With Display Attributes**:
+```sql
+SELECT 
+  asset.id,
+  asset.name,
+  asset.modelNumber,
+  asset.serialNumber
+FROM asset
+WHERE LOWER(asset.name) LIKE '%crane%'
+```
+
+**Formatted Response**:
+- "Crane #42" (using `name` as primary_label)
+- "Model: CAT-320, Serial: ABC123"
+
+#### Future Enhancements
+
+1. **Dynamic Attributes**: Context-aware column selection based on query
+2. **User Preferences**: Allow users to customize display columns
+3. **Computed Columns**: Support for derived/calculated display fields
+4. **Nested Labels**: Support for related table labels (e.g., "Asset: Crane #42, Owner: ACME Corp")
+5. **Localization**: Multi-language support for labels
+
 ### 3. RAG Agent
 
 Retrieval-Augmented Generation agent for policy and compliance questions.
 
-**Location**: `src/agents/rag_agent.py`
+**Location**: `src/agents/rag/agent.py`
 
 **Workflow**:
 ```mermaid
@@ -508,7 +663,7 @@ graph LR
 
 Direct LLM agent for general questions that don't require database or document access.
 
-**Location**: `src/agents/orchestrator_agent.py` (implemented as `_execute_general_agent`)
+**Location**: `src/agents/general/agent.py`
 
 **Workflow**:
 ```mermaid
@@ -588,7 +743,7 @@ graph TB
 
 ### Path Finder
 
-**Location**: `src/utils/path_finder.py`
+**Location**: `src/sql/graph/path_finder.py`
 
 Uses Dijkstra's algorithm to find shortest join paths between tables:
 
@@ -748,7 +903,7 @@ graph TB
 
 ### Secure View Map
 
-**Location**: `src/sql/secure_views.py`
+**Location**: `src/utils/sql/secure_views.py`
 
 ```python
 SECURE_VIEW_MAP = {
@@ -796,7 +951,10 @@ sequenceDiagram
     participant Orchestrator
     participant SQLAgent
     participant DomainOntology
+    participant DomainRegistry
     participant PathFinder
+    participant JoinGraph
+    participant DisplayAttrs
     participant SQLGen
     participant Rewriter
     participant Validator
@@ -806,14 +964,22 @@ sequenceDiagram
     User->>Orchestrator: "Show cranes with action items"
     Orchestrator->>SQLAgent: Route to SQL
     SQLAgent->>DomainOntology: Extract domain terms
+    DomainOntology->>DomainRegistry: Load term definitions
+    DomainRegistry-->>DomainOntology: Term mappings
     DomainOntology-->>SQLAgent: ["crane", "action_item"]
     SQLAgent->>DomainOntology: Resolve terms to schema
+    DomainOntology->>DomainRegistry: Lookup resolutions
+    DomainRegistry-->>DomainOntology: Tables + Filters + Confidence
     DomainOntology-->>SQLAgent: Tables + Filters
     SQLAgent->>SQLAgent: Select tables with domain context
+    SQLAgent->>JoinGraph: Load relationships
+    JoinGraph-->>SQLAgent: Available relationships
     SQLAgent->>PathFinder: Find join paths
     PathFinder-->>SQLAgent: Optimal paths
-    SQLAgent->>SQLGen: Generate SQL with domain filters
-    SQLGen-->>SQLAgent: SELECT ... WHERE crane filter AND action_item filter
+    SQLAgent->>DisplayAttrs: Get display columns for tables
+    DisplayAttrs-->>SQLAgent: Column specifications
+    SQLAgent->>SQLGen: Generate SQL with domain filters + display columns
+    SQLGen-->>SQLAgent: SELECT display_cols WHERE crane filter AND action_item filter
     SQLAgent->>Rewriter: Rewrite secure tables
     Rewriter-->>SQLAgent: SELECT ... FROM secure_* tables
     SQLAgent->>Validator: Pre-validate SQL
@@ -841,6 +1007,8 @@ sequenceDiagram
         MySQL-->>SQLAgent: Results
     end
     
+    SQLAgent->>DisplayAttrs: Format results with primary labels
+    DisplayAttrs-->>SQLAgent: Formatted results
     SQLAgent-->>Orchestrator: "5 cranes have action items"
     Orchestrator-->>User: Final answer
 ```
@@ -966,7 +1134,7 @@ MAX_QUERY_ROWS=100                  # Max rows returned from queries
 
 ### Configuration Loading
 
-**Location**: `src/utils/config.py`
+**Location**: `src/config/settings.py`
 
 Configuration is loaded using Pydantic `BaseSettings`, which automatically:
 - Reads from `.env` file
@@ -976,7 +1144,7 @@ Configuration is loaded using Pydantic `BaseSettings`, which automatically:
 
 **Usage**:
 ```python
-from src.utils.config import settings
+from src.config.settings import settings
 
 # Access configuration
 max_tables = settings.sql_max_tables_in_context
@@ -987,7 +1155,7 @@ max_columns = settings.sql_max_columns_in_schema
 
 ### MySQL Connection
 
-**Location**: `src/models/database.py`
+**Location**: `src/infra/database.py`
 
 **Connection String**:
 ```python
@@ -1099,6 +1267,9 @@ graph LR
 | **Streaming** | Server-Sent Events | Real-time responses |
 | **Path Finding** | Dijkstra Algorithm | Join path discovery |
 | **Domain Ontology** | JSON Registry + LLM | Business term to schema mapping |
+| **Display Attributes** | JSON Registry | Column selection and formatting |
+| **Memory** | SQLite + LangGraph Checkpoints | Conversation state persistence |
+| **Configuration** | Pydantic BaseSettings | Type-safe config management |
 
 ## Key Design Decisions
 
@@ -1182,7 +1353,9 @@ graph TB
 
 ### Implementation Details
 
-**Location**: `src/models/conversation_db.py` and `src/api/routes/chat.py`
+**Location**: 
+- `src/memory/conversation_store.py` (conversation storage)
+- `src/api/routes/chat.py` (API integration)
 
 **Key Components**:
 
@@ -1296,6 +1469,48 @@ CONVERSATION_DB_RETRY_DELAY=0.1                     # Initial retry delay (secon
 - Connection is kept open for application lifetime and closed on shutdown
 - Checkpoint timestamps are stored in checkpoint BLOB (not as separate column), requiring checkpoint loading for cleanup
 - Singleton pattern ensures single agent instance with compiled workflow (performance optimization)
+
+## Code Organization
+
+The codebase is organized into a modular structure:
+
+**Agents** (`src/agents/`):
+- Organized by agent type with dedicated folders
+- Each agent has its own module with nodes, state, and utilities
+- `orchestrator/` - Main orchestration logic with workflow nodes
+- `sql/` - SQL agent with nodes for each workflow step
+- `rag/` - RAG agent for document retrieval
+- `general/` - General LLM agent
+
+**Domain Logic** (`src/domain/`):
+- `ontology/` - Domain term extraction and resolution
+- `display_attributes/` - Display column management
+
+**Infrastructure** (`src/infra/`):
+- Database connections and connection pooling
+- Vector store initialization and management
+
+**Configuration** (`src/config/`):
+- Centralized settings and constants
+- Type-safe configuration with Pydantic
+
+**Memory** (`src/memory/`):
+- Conversation storage and checkpointing
+- Query memory for followup questions
+
+**LLM** (`src/llm/`):
+- LLM client abstraction
+- Embedding service
+
+**SQL Utilities** (`src/sql/`):
+- `execution/` - SQL execution and secure rewriting
+- `graph/` - Join graph and path finding
+- `planning/` - Join planning utilities
+
+**API** (`src/api/`):
+- FastAPI application
+- Routes organized by resource
+- Schemas for request/response validation
 
 ## Future Enhancements
 

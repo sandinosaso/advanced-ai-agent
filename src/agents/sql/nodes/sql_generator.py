@@ -180,6 +180,13 @@ def generate_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
             list(all_tables), 
             max_examples=5
         )
+        if display_attributes_examples:
+            logger.info(f"Generated display attributes examples for tables: {list(all_tables)}")
+    else:
+        logger.warning(
+            f"Display attributes not used - enabled: {settings.display_attributes_enabled}, "
+            f"ctx.display_attributes: {ctx.display_attributes is not None}"
+        )
 
     followup_where_clause = ""
     if state.get("is_followup") and state.get("referenced_ids"):
@@ -263,11 +270,10 @@ CRITICAL RULES:
 - DO NOT add secure_ prefix - the system handles that automatically
 
 IMPORTANT - SELECT CLAUSE GUIDANCE:
-- ALWAYS include human-readable identifiers (name, firstName/lastName, description) in your SELECT
-- For inspection queries: include inspectionTemplate.name to show which inspection type
-- For employee queries: include firstName and lastName, not just id
-- For status queries: include the status name column, not just the ID
-- Even in aggregate queries, include identifying columns in SELECT and GROUP BY
+- ALWAYS include human-readable identifiers (name, firstName/lastName, description) in your SELECT, not just IDs
+- When using GROUP BY with a table, include the table's display attributes in BOTH SELECT and GROUP BY clauses
+  Example: GROUP BY employee.id, employee.firstName, employee.lastName (not just employee.id)
+- This applies even to aggregate queries - users need to see WHO/WHAT the aggregates are for
 {name_label_examples if name_label_examples else ""}
 {display_attributes_examples if display_attributes_examples else ""}
 {followup_where_clause}
@@ -283,7 +289,7 @@ IMPORTANT: {bridge_example} Do NOT skip bridge tables and try to join tables dir
 Return ONLY the SQL query, nothing else.
 """
 
-    logger.debug(f"[PROMPT] generate_sql prompt:\n{prompt}")
+    logger.info(f"[PROMPT] generate_sql prompt:\n{prompt}")
     response = ctx.llm.invoke(prompt)
     raw_sql = str(response.content).strip() if hasattr(response, "content") and response.content else ""
     if raw_sql.startswith("```"):
