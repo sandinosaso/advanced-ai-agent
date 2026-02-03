@@ -108,6 +108,8 @@ class DisplayAttributesManager:
                 columns = concept_config.display_override[table].copy()
                 if include_id and "id" not in columns:
                     columns.insert(0, "id")
+                if not include_id and "id" in columns:
+                    columns = [c for c in columns if c != "id"]
                 return columns
         
         # Fall back to table default configuration
@@ -115,6 +117,8 @@ class DisplayAttributesManager:
             columns = self.tables_config[table].display_columns.copy()
             if include_id and "id" not in columns:
                 columns.insert(0, "id")
+            if not include_id and "id" in columns:
+                columns = [c for c in columns if c != "id"]
             return columns
         
         # No configuration found, return just id
