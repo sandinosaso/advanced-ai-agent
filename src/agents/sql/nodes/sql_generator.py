@@ -16,6 +16,8 @@ from src.agents.sql.planning import (
     extract_tables_from_join_plan,
     parse_join_path_steps,
     get_excluded_columns,
+    get_required_join_constraints,
+    validate_scoped_joins,
 )
 from src.agents.sql.prompt_helpers import (
     build_name_label_examples,
@@ -284,7 +286,7 @@ Join plan (follow this EXACTLY, step by step):
 
 {"EXPLICIT JOIN STEPS (follow these in order):" + chr(10) + chr(10).join(f"{i+1}. {step}" for i, step in enumerate(join_path_steps)) if join_path_steps else ""}
 
-IMPORTANT: {bridge_example} Do NOT skip bridge tables and try to join tables directly.
+IMPORTANT: {bridge_example} Only include bridge tables if they are explicitly listed in the JOIN_PATH above. Do NOT add unnecessary bridge tables when direct foreign keys exist.
 {_build_domain_filter_instructions(state)}
 Return ONLY the SQL query, nothing else.
 """
@@ -303,6 +305,21 @@ Return ONLY the SQL query, nothing else.
         logger.info("Injected domain filters into SQL")
 
     raw_sql = _deduplicate_joins(raw_sql)
+    
+    # Validate scoped joins
+    required_constraints = get_required_join_constraints(
+        state.get("domain_resolutions", []),
+        ctx.domain_ontology
+    )
+    
+    if required_constraints:
+        missing_constraints = validate_scoped_joins(raw_sql, required_constraints)
+        if missing_constraints:
+            logger.warning(f"Missing scoped join constraints: {missing_constraints}")
+            # Add to validation notes for potential correction
+            state["validation_notes"] = state.get("validation_notes", []) + [
+                f"Missing required join constraints: {', '.join(missing_constraints)}"
+            ]
 
     rewritten_sql = rewrite_secure_tables(raw_sql)
     logger.info(f"Rewritten SQL (after secure view conversion): {rewritten_sql}")

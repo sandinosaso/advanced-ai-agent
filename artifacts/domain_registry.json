@@ -224,6 +224,16 @@
             "inspectionTypeOption",
             "attachment",
             "media"
+          ],
+          "required_join_constraints": [
+            {
+              "table": "inspectionQuestionAnswer",
+              "conditions": [
+                "inspectionQuestionAnswer.inspectionId = inspection.id",
+                "inspectionQuestionAnswer.inspectionQuestionId = inspectionQuestion.id"
+              ],
+              "note": "Answers must be scoped to both inspection instance and question template to prevent cross-contamination"
+            }
           ]
         }
       }
@@ -235,10 +245,20 @@
       "requires_atomic_signals": ["safety"],
       "resolution": {
         "primary": {
-          "tables": ["safetyQuestion", "safetyQuestionAnswer"],
+          "tables": ["safety", "safetyQuestion", "safetyQuestionAnswer"],
           "match_type": "structural",
           "confidence": 0.95,
-          "note": "Always include both tables together - they form a parent-child relationship"
+          "note": "Always include both tables together - they form a parent-child relationship",
+          "required_join_constraints": [
+            {
+              "table": "safetyQuestionAnswer",
+              "conditions": [
+                "safetyQuestionAnswer.safetyId = safety.id",
+                "safetyQuestionAnswer.safetyQuestionId = safetyQuestion.id"
+              ],
+              "note": "Answers must be scoped to both safety instance and question template"
+            }
+          ]
         }
       }
     },
@@ -249,10 +269,20 @@
       "requires_atomic_signals": ["service"],
       "resolution": {
         "primary": {
-          "tables": ["serviceQuestion", "serviceQuestionAnswer"],
+          "tables": ["service", "serviceQuestion", "serviceQuestionAnswer"],
           "match_type": "structural",
           "confidence": 0.95,
-          "note": "Always include both tables together - they form a parent-child relationship"
+          "note": "Always include both tables together - they form a parent-child relationship",
+          "required_join_constraints": [
+            {
+              "table": "serviceQuestionAnswer",
+              "conditions": [
+                "serviceQuestionAnswer.serviceId = service.id",
+                "serviceQuestionAnswer.serviceQuestionId = serviceQuestion.id"
+              ],
+              "note": "Answers must be scoped to both service instance and question template"
+            }
+          ]
         }
       }
     }

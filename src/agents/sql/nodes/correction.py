@@ -12,6 +12,7 @@ from src.agents.sql.utils import trace_step
 from src.config.settings import settings
 from src.sql.execution.secure_rewriter import rewrite_secure_tables, from_secure_view
 from src.agents.sql.prompt_helpers import build_duplicate_join_example
+from src.agents.sql.planning import get_required_join_constraints
 
 
 def correct_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
@@ -138,6 +139,35 @@ EXAMPLE FIX:
   GROUP BY DATE_FORMAT(DATE(createdAt), '%Y-%m-%d')  -- Must match SELECT exactly
 """
 
+    # Get scoped join requirements
+    scoped_join_warning = ""
+    required_constraints = get_required_join_constraints(
+        state.get("domain_resolutions", []),
+        ctx.domain_ontology
+    )
+    if required_constraints:
+        scoped_join_warning = "\n\n⚠️ CRITICAL - SCOPED JOIN REQUIREMENTS:\n"
+        scoped_join_warning += "Some tables require COMPOUND join conditions (multiple AND predicates).\n"
+        scoped_join_warning += "You MUST preserve ALL join conditions, especially AND clauses:\n\n"
+        for constraint in required_constraints:
+            table = constraint.get("table")
+            conditions = constraint.get("conditions", [])
+            note = constraint.get("note", "")
+            scoped_join_warning += f"Table '{table}' requires ALL these conditions:\n"
+            for condition in conditions:
+                scoped_join_warning += f"  - {condition}\n"
+            if note:
+                scoped_join_warning += f"Reason: {note}\n"
+        scoped_join_warning += "\nWhen fixing join errors, you MUST keep compound AND conditions intact!\n"
+        scoped_join_warning += "Only fix the column/table names - DO NOT remove AND predicates.\n"
+    
+    # Add join type preservation warning
+    join_type_warning = "\n\n⚠️ CRITICAL - JOIN TYPE PRESERVATION:\n"
+    join_type_warning += "When fixing joins, preserve the join type (LEFT JOIN vs JOIN):\n"
+    join_type_warning += "- DO NOT convert LEFT JOIN to JOIN - this changes query semantics\n"
+    join_type_warning += "- LEFT JOINs are used for optional data (e.g., answers that may not exist)\n"
+    join_type_warning += "- Only fix the join conditions/columns - keep the join type as-is\n"
+
     prompt = f"""You are a SQL correction agent. Fix this SQL error:
 
 ERROR: {error_message}
@@ -151,6 +181,8 @@ RELEVANT TABLE SCHEMAS (only tables used in the query above):
 RELEVANT RELATIONSHIPS (only between tables in query):
 {json.dumps(relevant_relationships[:settings.sql_max_relationships_in_prompt], indent=2) if relevant_relationships else "No relationships found"}
 {history_text}
+{scoped_join_warning}
+{join_type_warning}
 
 INSTRUCTIONS:
 1. Analyze the error message carefully
@@ -160,6 +192,8 @@ INSTRUCTIONS:
    - Ensuring all columns exist in their respective tables
    - Fixing any join conditions that reference wrong columns
    - If same table appears in multiple JOINs, keep only the most direct path
+   - CRITICAL: Preserve ALL compound join conditions (AND clauses) - only fix column/table names
+   - CRITICAL: Preserve join types (LEFT JOIN vs JOIN) - do NOT change them
 {duplicate_table_instructions}{group_by_instructions}
 4. Return ONLY the corrected SQL query, nothing else
 5. Do NOT add comments or explanations

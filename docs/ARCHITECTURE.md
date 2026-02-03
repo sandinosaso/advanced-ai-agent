@@ -766,6 +766,141 @@ path = path_finder.find_shortest_path("employee", "customer", max_hops=4)
 - **After**: O((V + E) log V) - < 100ms per query
 - **Caching**: O(1) for repeated paths
 
+### Semantic Role System
+
+The join graph includes a **semantic role system** that classifies tables by their business purpose. This prevents the system from adding unnecessary bridge tables when direct foreign key relationships exist.
+
+**Location**: `artifacts/join_graph_manual.json` (table_metadata section)
+
+#### Table Roles
+
+Tables are classified into semantic roles that determine their behavior in bridge table discovery:
+
+| Role | Purpose | Bridge Behavior | Examples |
+|------|---------|-----------------|----------|
+| **instance** | Primary entity executions | Normal bridge candidate | `inspection`, `safety`, `service`, `workTime` |
+| **template** | Structure/schema definitions | Normal bridge candidate | `inspectionTemplate`, `safetyTemplate` |
+| **bridge** | Legitimate many-to-many junctions | Used as bridges when needed | `inspectionTemplateWorkOrder`, `serviceTemplateWorkOrder` |
+| **content_child** | Child data within parent context | Normal bridge candidate | `inspectionQuestion`, `inspectionQuestionAnswer` |
+| **satellite** | Orthogonal auxiliary data | **NEVER** used as bridge | `inspectionConfiguration`, `inspectionSignature` |
+| **assignment** | Membership/assignment tracking | **NEVER** used as bridge | `employeeCrew` (crew assignments) |
+| **configuration** | Permission/config settings | **NEVER** used as bridge | `employeeRoleWorkTimeType` (role permissions) |
+
+#### Bridge Table Discovery Logic
+
+The `find_bridge_tables()` function uses a three-layer defense strategy:
+
+**Layer 1: Semantic Role Filtering**
+```python
+# Exclude satellite, assignment, and configuration tables
+if role in ("satellite", "assignment", "configuration"):
+    logger.debug(f"Excluding {role} table from bridge discovery")
+    return True
+```
+
+**Layer 2: Metadata Exclusions**
+```json
+{
+  "employeeCrew": {
+    "role": "assignment",
+    "exclude_as_bridge_for": ["workTime", "employee"],
+    "note": "Only for crew membership, not time tracking"
+  }
+}
+```
+
+**Layer 3: Direct Path Detection**
+```python
+# Only add bridge if no direct path exists
+if all_have_direct_path:
+    logger.info("Skipping bridge - direct paths exist")
+    continue
+```
+
+#### Example: workTime Query
+
+**Problem**: System was adding unnecessary bridge tables
+
+**Before Fix**:
+```
+Query: "employees with work time between Oct 6-12"
+Selected: employee, workTime, workTimeType
+Bridges added: employeeCrew ❌, employeeRoleWorkTimeType ❌
+Result: 5 tables (incorrect)
+```
+
+**After Fix**:
+```
+Query: "employees with work time between Oct 6-12"
+Selected: employee, workTime, workTimeType
+Bridges added: None (direct FKs exist)
+Result: 3 tables using: workTime.employeeId -> employee.id ✅
+```
+
+**Why the fix works**:
+1. `employeeCrew` has role="assignment" → excluded from bridge discovery
+2. `employeeRoleWorkTimeType` has role="configuration" → excluded from bridge discovery
+3. Direct foreign key `workTime.employeeId -> employee.id` exists (confidence=1.0)
+4. Bridge table logic detects direct path and skips unnecessary bridges
+
+#### When to Use Each Role
+
+**instance**: Use for tables representing actual executions/records
+- ✅ `inspection` (inspection instance)
+- ✅ `workTime` (time entry record)
+- ✅ `safety` (safety execution)
+
+**satellite**: Use for orthogonal auxiliary data that doesn't affect query logic
+- ✅ Signatures (inspectionCustomerSignature)
+- ✅ Attachments (inspectionQAAttachment)
+- ✅ Configuration (inspectionConfiguration)
+
+**assignment**: Use for membership/assignment tracking tables
+- ✅ `employeeCrew` - tracks which employees are on which crews
+- ✅ Not needed for: time tracking, inspection queries, direct employee data
+
+**configuration**: Use for permission/settings tables
+- ✅ `employeeRoleWorkTimeType` - defines allowed work types per role
+- ✅ Not needed for: actual time entries, employee work records
+
+**bridge**: Use for legitimate many-to-many junction tables that ARE needed
+- ✅ `inspectionTemplateWorkOrder` - connects inspection instances to work orders
+- ✅ Required when: querying both inspections AND work orders
+
+#### Adding New Semantic Roles
+
+Edit `artifacts/join_graph_manual.json`:
+
+```json
+{
+  "table_metadata": {
+    "yourTable": {
+      "role": "assignment",
+      "category": "membership",
+      "description": "What this table does",
+      "exclude_as_bridge_for": ["table1", "table2"],
+      "note": "When this table should/shouldn't be used"
+    }
+  }
+}
+```
+
+**No code changes needed** - the system reads metadata dynamically.
+
+#### Benefits
+
+- ✅ **Simpler queries**: Uses 3-4 tables instead of 5+ when direct paths exist
+- ✅ **Fewer errors**: Reduces Cartesian products from unnecessary bridges
+- ✅ **Better semantics**: Separates instance data from configuration/assignment data
+- ✅ **Maintainable**: Metadata-driven, no hardcoded table lists in code
+
+#### Implementation Files
+
+- `src/agents/sql/planning/bridge_tables.py` - Bridge discovery logic
+- `src/agents/sql/nodes/join_planner.py` - Join planning with role awareness
+- `artifacts/join_graph_manual.json` - Semantic role metadata
+- `src/utils/path_finder.py` - Path finding with role filtering
+
 ## SQL Error Correction System
 
 The system includes a robust error correction mechanism that handles SQL generation errors through pre-validation and iterative correction.

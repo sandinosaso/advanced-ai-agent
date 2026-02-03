@@ -477,3 +477,55 @@ def build_display_attributes_examples(
     result += "\n"
     
     return result
+
+
+def build_scoped_join_example(join_graph: Dict[str, Any]) -> str:
+    """
+    Extract example scoped join from join graph for prompt.
+    
+    Finds relationships with scoped_conditions to demonstrate compound join syntax.
+    
+    Args:
+        join_graph: Join graph containing relationships and metadata
+        
+    Returns:
+        Formatted example showing compound join conditions, or empty string if none found
+    """
+    relationships = join_graph.get("relationships", [])
+    
+    # Find relationships with scoped_conditions
+    scoped_rels = [r for r in relationships if r.get("scoped_conditions")]
+    
+    if not scoped_rels:
+        return ""
+    
+    # Use the first scoped relationship as an example
+    example_rel = scoped_rels[0]
+    from_table = example_rel.get("from_table")
+    to_table = example_rel.get("to_table")
+    from_column = example_rel.get("from_column")
+    to_column = example_rel.get("to_column")
+    scoped_conditions = example_rel.get("scoped_conditions", [])
+    
+    if not scoped_conditions:
+        return ""
+    
+    example = f"\nSCOPED JOIN EXAMPLE:\n"
+    example += f"Table '{from_table}' requires compound join conditions:\n\n"
+    example += f"LEFT JOIN {from_table}\n"
+    example += f"  ON {to_table}.{to_column} = {from_table}.{from_column}\n"
+    
+    for scoped_cond in scoped_conditions:
+        condition = scoped_cond.get("condition", "")
+        also_requires = scoped_cond.get("also_requires", "")
+        reason = scoped_cond.get("reason", "")
+        
+        if condition:
+            example += f" AND {condition}\n"
+        
+        if reason:
+            example += f"\nReason: {reason}\n"
+    
+    example += "\nIMPORTANT: When you see scoped join requirements, you MUST include ALL conditions with AND.\n"
+    
+    return example

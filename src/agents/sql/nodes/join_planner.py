@@ -16,6 +16,8 @@ from src.agents.sql.planning import (
     get_domain_bridges,
     get_exclude_bridge_patterns,
     get_excluded_columns,
+    build_scoped_join_hints,
+    get_join_type_hints,
 )
 from src.agents.sql.prompt_helpers import build_bridge_table_example
 
@@ -50,17 +52,27 @@ def filter_relationships_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraph
         f"(added {len(expanded_relationships) - len(direct_relationships)} transitive paths)"
     )
 
+    # Get table metadata and exclusion patterns BEFORE bridge discovery
+    table_metadata = ctx.join_graph.get("table_metadata", {})
+    exclude_patterns = get_exclude_bridge_patterns(
+        state.get("domain_resolutions", []), ctx.domain_ontology
+    )
+    
+    # Find bridge tables with semantic filtering
     candidate_bridges = find_bridge_tables(
-        selected, rels, ctx.join_graph["tables"], confidence_threshold=confidence_threshold
+        selected, 
+        rels, 
+        ctx.join_graph["tables"], 
+        table_metadata=table_metadata,
+        exclude_patterns=exclude_patterns,
+        confidence_threshold=confidence_threshold
     )
     on_path = get_bridges_on_paths(selected, ctx.path_finder)
     domain_bridges = get_domain_bridges(
         state.get("domain_resolutions", []), ctx.domain_ontology, ctx.join_graph["tables"]
     )
     relevant = on_path | (domain_bridges & candidate_bridges)
-    exclude_patterns = get_exclude_bridge_patterns(
-        state.get("domain_resolutions", []), ctx.domain_ontology
-    )
+    # Note: exclude_patterns already applied in find_bridge_tables, but keep for safety
     if exclude_patterns:
         relevant = {t for t in relevant if not any(p.lower() in t.lower() for p in exclude_patterns)}
     if relevant:
@@ -195,6 +207,16 @@ def plan_joins_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
                 break
 
     bridge_example = build_bridge_table_example(ctx.join_graph)
+    
+    # Get scoped join hints
+    scoped_join_hints = build_scoped_join_hints(
+        state.get("domain_resolutions", []),
+        ctx.domain_ontology,
+        ctx.join_graph
+    )
+    
+    # Get join type hints (LEFT JOIN vs JOIN)
+    join_type_hints = get_join_type_hints(selected_tables, ctx.join_graph)
 
     prompt = f"""
 You are planning SQL joins. You MUST ONLY use the allowed relationships.
@@ -214,27 +236,38 @@ Direct and transitive relationships available (for reference only - prefer sugge
 {json.dumps(rels_display[:settings.sql_max_relationships_in_prompt], indent=2)}
 {domain_filter_hints}
 {display_hints}
+{join_type_hints}
+{scoped_join_hints}
 Task:
 - PRIMARY: Use the suggested paths above - they are computed by the graph algorithm and are correct
+- PREFER DIRECT RELATIONSHIPS: When two tables have a direct foreign key, use it directly (e.g., workTime.employeeId -> employee.id)
+- AVOID UNNECESSARY BRIDGES: Do NOT add bridge tables if a direct path already exists between the tables
+  * Example: If workTime has employeeId FK to employee, DO NOT use employeeCrew as a bridge
+  * Example: If workTime has workTimeTypeId FK to workTimeType, DO NOT use employeeRoleWorkTimeType as a bridge
 - If a PREFERRED JOIN CHAIN is stated above for this domain, USE THAT CHAIN in order (do not use a shorter path that skips tables in the chain)
 - If a suggested path exists for the tables you need to connect, USE IT EXACTLY as shown
 - Only construct your own path if no suggested path exists
 - Prefer shorter paths (fewer hops) when multiple options exist, unless a PREFERRED JOIN CHAIN is given
 - Use cardinality to prefer safer joins (N:1 / 1:1 over N:N)
-- CRITICAL: {bridge_example} Do NOT skip bridge tables.
+- CRITICAL: {bridge_example} Only use bridge tables when NO direct path exists between the tables.
+- CRITICAL: If SCOPED JOIN REQUIREMENTS are listed above, combine multiple conditions into ONE JOIN step using AND
+- CRITICAL: Prefix each join with the correct type (LEFT JOIN or JOIN) as specified in JOIN TYPE REQUIREMENTS
 - If no allowed join path exists, say "NO_JOIN_PATH".
 
 Question: {state['question']}
 
 Output format:
 JOIN_PATH:
-- tableA.col = tableB.col (cardinality, confidence)
-- tableB.col = tableC.col (cardinality, confidence)  # if bridge table needed
+- JOIN: tableA.col = tableB.col (cardinality, confidence)
+- JOIN: tableB.col = tableC.col (cardinality, confidence)  # if bridge table needed
+- LEFT JOIN: tableX.col = tableY.col (cardinality, confidence)
+ AND tableY.col2 = tableZ.col2 (cardinality, confidence)  # if compound/scoped join needed
 - ...
 
 NOTES:
 - brief reasoning about path choice
 - explicitly state if using bridge tables and why
+- mention which tables use LEFT JOIN and why
 """
 
     logger.debug(f"[PROMPT] plan_joins prompt:\n{prompt}")

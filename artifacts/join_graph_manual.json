@@ -30,6 +30,348 @@
             "confidence": 1.0,
             "cardinality": "N:1",
             "evidence": {"note": "manual business-critical join"}
+        },
+        {
+            "from_table": "inspectionQuestionAnswer",
+            "from_column": "inspectionId",
+            "to_table": "inspection",
+            "to_column": "id",
+            "type": "scoped_child",
+            "confidence": 1.0,
+            "cardinality": "unknown",
+            "scoped_conditions": [
+                {
+                    "also_requires": "inspectionQuestion",
+                    "condition": "inspectionQuestionAnswer.inspectionQuestionId = inspectionQuestion.id",
+                    "reason": "Answers must be scoped to both inspection instance and question template"
+                }
+            ]
+        },
+        {
+            "from_table": "safetyQuestionAnswer",
+            "from_column": "safetyId",
+            "to_table": "safety",
+            "to_column": "id",
+            "type": "scoped_child",
+            "confidence": 1.0,
+            "cardinality": "unknown",
+            "scoped_conditions": [
+                {
+                    "also_requires": "safetyQuestion",
+                    "condition": "safetyQuestionAnswer.safetyQuestionId = safetyQuestion.id",
+                    "reason": "Answers must be scoped to both safety instance and question template"
+                }
+            ]
+        },
+        {
+            "from_table": "serviceQuestionAnswer",
+            "from_column": "serviceId",
+            "to_table": "service",
+            "to_column": "id",
+            "type": "scoped_child",
+            "confidence": 1.0,
+            "cardinality": "unknown",
+            "scoped_conditions": [
+                {
+                    "also_requires": "serviceQuestion",
+                    "condition": "serviceQuestionAnswer.serviceQuestionId = serviceQuestion.id",
+                    "reason": "Answers must be scoped to both service instance and question template"
+                }
+            ]
         }
-    ]
+    ],
+    "table_metadata": {
+        "inspectionCustomerSignature": {
+            "role": "satellite",
+            "category": "signature",
+            "description": "Customer signature for inspection - orthogonal to inspection content"
+        },
+        "inspectionCrewSignature": {
+            "role": "satellite",
+            "category": "signature",
+            "description": "Crew signature for inspection - orthogonal to inspection content"
+        },
+        "inspectionConfiguration": {
+            "role": "satellite",
+            "category": "configuration",
+            "description": "Configuration settings for inspection - orthogonal to inspection content"
+        },
+        "inspectionQAAttachment": {
+            "role": "satellite",
+            "category": "attachment",
+            "description": "Attachments for inspection questions - orthogonal to core inspection content"
+        },
+        "inspectionQAAttachmentType": {
+            "role": "satellite",
+            "category": "type_option",
+            "description": "Type definitions for attachments - orthogonal to inspection content"
+        },
+        "inspectionQuestionGuidance": {
+            "role": "satellite",
+            "category": "guidance",
+            "description": "Guidance for inspection questions - orthogonal to inspection content"
+        },
+        "inspectionTemplateConfiguration": {
+            "role": "satellite",
+            "category": "configuration",
+            "description": "Configuration for inspection templates - orthogonal to inspection content"
+        },
+        "inspectionCertificationStatusOption": {
+            "role": "satellite",
+            "category": "type_option",
+            "description": "Status options for inspection - orthogonal to inspection content"
+        },
+        "inspectionQuestionTypeOption": {
+            "role": "satellite",
+            "category": "type_option",
+            "description": "Type options for inspection questions - orthogonal to inspection content"
+        },
+        "inspectionQuestionTypeOptionCategory": {
+            "role": "satellite",
+            "category": "type_option",
+            "description": "Type option categories for inspection questions - orthogonal to inspection content"
+        },
+        "inspectionQuestionAnswer": {
+            "role": "content_child",
+            "category": "form_data",
+            "requires_scoping": true,
+            "description": "Answers to inspection questions - requires scoping to both question and inspection instance"
+        },
+        "inspectionQuestion": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Questions in inspection templates"
+        },
+        "inspectionQuestionGroup": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Question groups in inspection templates"
+        },
+        "inspectionSection": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Sections in inspection templates"
+        },
+        "inspectionTemplate": {
+            "role": "template",
+            "category": "form_structure",
+            "description": "Inspection template definitions"
+        },
+        "inspectionTemplateWorkOrder": {
+            "role": "bridge",
+            "category": "junction",
+            "description": "Legitimate bridge between inspection and work order"
+        },
+        "inspection": {
+            "role": "instance",
+            "category": "form_execution",
+            "description": "Inspection instance/execution"
+        },
+        "inspectionQuestionAnswerOption": {
+            "role": "content_child",
+            "category": "form_data",
+            "description": "Answer options for inspection questions"
+        },
+        "inspectionQuestionOption": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Options for inspection questions"
+        },
+        "inspectionQuestionType": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Question types for inspections"
+        },
+        "safetySignature": {
+            "role": "satellite",
+            "category": "signature",
+            "description": "Signature for safety - orthogonal to safety content"
+        },
+        "safetyQAAttachment": {
+            "role": "satellite",
+            "category": "attachment",
+            "description": "Attachments for safety questions - orthogonal to core safety content"
+        },
+        "safetyQAAttachmentType": {
+            "role": "satellite",
+            "category": "type_option",
+            "description": "Type definitions for attachments - orthogonal to safety content"
+        },
+        "safetyQuestionGuidance": {
+            "role": "satellite",
+            "category": "guidance",
+            "description": "Guidance for safety questions - orthogonal to safety content"
+        },
+        "safetyTemplateConfiguration": {
+            "role": "satellite",
+            "category": "configuration",
+            "description": "Configuration for safety templates - orthogonal to safety content"
+        },
+        "safetyQuestionAnswer": {
+            "role": "content_child",
+            "category": "form_data",
+            "requires_scoping": true,
+            "description": "Answers to safety questions - requires scoping to both question and safety instance"
+        },
+        "safetyQuestion": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Questions in safety templates"
+        },
+        "safetyQuestionGroup": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Question groups in safety templates"
+        },
+        "safetySection": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Sections in safety templates"
+        },
+        "safetyTemplate": {
+            "role": "template",
+            "category": "form_structure",
+            "description": "Safety template definitions"
+        },
+        "safetyTemplateWorkOrder": {
+            "role": "bridge",
+            "category": "junction",
+            "description": "Legitimate bridge between safety and work order"
+        },
+        "safety": {
+            "role": "instance",
+            "category": "form_execution",
+            "description": "Safety instance/execution"
+        },
+        "safetyQuestionAnswerOption": {
+            "role": "content_child",
+            "category": "form_data",
+            "description": "Answer options for safety questions"
+        },
+        "safetyQuestionOption": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Options for safety questions"
+        },
+        "safetyQuestionType": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Question types for safety"
+        },
+        "serviceCustomerSignature": {
+            "role": "satellite",
+            "category": "signature",
+            "description": "Customer signature for service - orthogonal to service content"
+        },
+        "serviceCrewSignature": {
+            "role": "satellite",
+            "category": "signature",
+            "description": "Crew signature for service - orthogonal to service content"
+        },
+        "serviceConfiguration": {
+            "role": "satellite",
+            "category": "configuration",
+            "description": "Configuration settings for service - orthogonal to service content"
+        },
+        "serviceQAAttachment": {
+            "role": "satellite",
+            "category": "attachment",
+            "description": "Attachments for service questions - orthogonal to core service content"
+        },
+        "serviceQAAttachmentType": {
+            "role": "satellite",
+            "category": "type_option",
+            "description": "Type definitions for attachments - orthogonal to service content"
+        },
+        "serviceQuestionGuidance": {
+            "role": "satellite",
+            "category": "guidance",
+            "description": "Guidance for service questions - orthogonal to service content"
+        },
+        "serviceTemplateConfiguration": {
+            "role": "satellite",
+            "category": "configuration",
+            "description": "Configuration for service templates - orthogonal to service content"
+        },
+        "serviceCertificationStatusOption": {
+            "role": "satellite",
+            "category": "type_option",
+            "description": "Status options for service - orthogonal to service content"
+        },
+        "serviceQuestionTypeOption": {
+            "role": "satellite",
+            "category": "type_option",
+            "description": "Type options for service questions - orthogonal to service content"
+        },
+        "serviceQuestionTypeOptionCategory": {
+            "role": "satellite",
+            "category": "type_option",
+            "description": "Type option categories for service questions - orthogonal to service content"
+        },
+        "serviceQuestionAnswer": {
+            "role": "content_child",
+            "category": "form_data",
+            "requires_scoping": true,
+            "description": "Answers to service questions - requires scoping to both question and service instance"
+        },
+        "serviceQuestion": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Questions in service templates"
+        },
+        "serviceQuestionGroup": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Question groups in service templates"
+        },
+        "serviceSection": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Sections in service templates"
+        },
+        "serviceTemplate": {
+            "role": "template",
+            "category": "form_structure",
+            "description": "Service template definitions"
+        },
+        "serviceTemplateWorkOrder": {
+            "role": "bridge",
+            "category": "junction",
+            "description": "Legitimate bridge between service and work order"
+        },
+        "service": {
+            "role": "instance",
+            "category": "form_execution",
+            "description": "Service instance/execution"
+        },
+        "serviceQuestionAnswerOption": {
+            "role": "content_child",
+            "category": "form_data",
+            "description": "Answer options for service questions"
+        },
+        "serviceQuestionOption": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Options for service questions"
+        },
+        "serviceQuestionType": {
+            "role": "content_child",
+            "category": "form_structure",
+            "description": "Question types for service"
+        },
+        "employeeCrew": {
+            "role": "assignment",
+            "category": "crew_membership",
+            "description": "Employee-to-crew assignments - tracks which employees are assigned to which crews, not time tracking data",
+            "exclude_as_bridge_for": ["workTime", "employee"],
+            "note": "Only needed when querying crew membership or assignments, not for time entries"
+        },
+        "employeeRoleWorkTimeType": {
+            "role": "configuration",
+            "category": "permission",
+            "description": "Allowed work time types per employee role - defines permissions/configuration, not actual time entries",
+            "exclude_as_bridge_for": ["workTime", "workTimeType"],
+            "note": "Only needed when querying role permissions or allowed types, not for actual time tracking"
+        }
+    }
 }

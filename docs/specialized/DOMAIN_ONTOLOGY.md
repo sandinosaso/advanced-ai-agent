@@ -176,10 +176,113 @@ No code changes needed. Run `pytest tests/test_domain_ontology.py` to validate.
 
 ---
 
+## 6. Semantic Role System Integration
+
+The domain ontology works together with the **semantic role system** defined in `artifacts/join_graph_manual.json`. While the domain ontology focuses on business terminology mapping, the semantic role system controls table selection and bridge table behavior.
+
+### Semantic Roles Overview
+
+Tables are classified by their business purpose to prevent incorrect bridge table usage:
+
+| Role | Purpose | Bridge Behavior |
+|------|---------|-----------------|
+| **instance** | Entity executions/records | Normal bridge candidate |
+| **template** | Schema/structure definitions | Normal bridge candidate |
+| **bridge** | Many-to-many junctions | Used as bridges when needed |
+| **content_child** | Child data within context | Normal bridge candidate |
+| **satellite** | Auxiliary orthogonal data | **NEVER** used as bridge |
+| **assignment** | Membership/assignment tracking | **NEVER** used as bridge |
+| **configuration** | Permission/settings | **NEVER** used as bridge |
+
+### Integration Points
+
+#### 1. Table Selection
+When domain terms are resolved, the semantic role influences which tables are included:
+- **instance/template/bridge** tables: Included when domain term matches
+- **satellite** tables: Excluded from bridge discovery
+- **assignment/configuration** tables: Only included if explicitly required by domain term
+
+#### 2. Bridge Table Discovery
+The semantic role system prevents unnecessary bridges:
+
+```python
+# In find_bridge_tables()
+if role in ("satellite", "assignment", "configuration"):
+    # Exclude from bridge consideration
+    return True
+```
+
+Example: When querying `workTime` data:
+- ✅ Uses direct FK: `workTime.employeeId -> employee.id`
+- ❌ Skips `employeeCrew` (role="assignment" - crew membership)
+- ❌ Skips `employeeRoleWorkTimeType` (role="configuration" - permissions)
+
+#### 3. Domain Term + Semantic Role
+
+When a domain term like `inspection_questions_and_answers` is detected:
+
+1. **Domain Ontology** provides:
+   - Required tables: `inspection`, `inspectionQuestion`, `inspectionQuestionAnswer`
+   - Required join constraints: `inspectionQuestionAnswer.inspectionId = inspection.id`
+   - Filter hints: Match types, columns to filter
+
+2. **Semantic Role System** filters:
+   - ✅ Includes: `inspection` (instance), `inspectionQuestion` (content_child)
+   - ❌ Excludes: `inspectionConfiguration` (satellite), `inspectionSignature` (satellite)
+   - ✅ Uses bridges: `inspectionTemplateWorkOrder` (bridge) when needed
+
+### Example: Combined Usage
+
+**Query**: "Show me inspection questions and answers for work order #123"
+
+**Domain Ontology Resolution**:
+```json
+{
+  "term": "inspection_questions_and_answers",
+  "tables": ["inspection", "inspectionQuestion", "inspectionQuestionAnswer"],
+  "required_join_constraints": [
+    "inspectionQuestionAnswer.inspectionId = inspection.id"
+  ]
+}
+```
+
+**Semantic Role Filtering**:
+```
+Selected tables with roles:
+- inspection (instance) ✅
+- inspectionQuestion (content_child) ✅  
+- inspectionQuestionAnswer (content_child) ✅
+- inspectionTemplateWorkOrder (bridge) ✅ - needed to connect to workOrder
+
+Excluded from bridges:
+- inspectionConfiguration (satellite) ❌
+- inspectionCustomerSignature (satellite) ❌
+```
+
+**Result**: Clean query with only necessary tables, correctly scoped joins.
+
+### When to Define Each
+
+**Use Domain Ontology** (`domain_registry.json`) when:
+- Mapping business terms to database concepts
+- Defining required join constraints (template-instance scoping)
+- Specifying filter conditions (text_search, boolean, etc.)
+
+**Use Semantic Roles** (`join_graph_manual.json`) when:
+- Preventing incorrect bridge table usage
+- Marking auxiliary/orthogonal data (satellite)
+- Distinguishing assignment/configuration from instance data
+
+Both systems work together to produce accurate, efficient SQL queries.
+
+---
+
 ## Related Files
 
 - `src/domain/ontology/` – Core module
 - `artifacts/domain_registry.json` – Registry
+- `artifacts/join_graph_manual.json` – Semantic role metadata
 - `src/agents/sql/nodes/domain.py` – Workflow nodes
 - `src/agents/sql/planning/domain_filters.py` – Filter injection
+- `src/agents/sql/planning/bridge_tables.py` – Bridge discovery with semantic roles
 - `tests/test_domain_ontology.py`, `tests/test_domain_e2e.py`

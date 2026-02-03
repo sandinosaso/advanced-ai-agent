@@ -23,20 +23,52 @@ class JoinPathFinder:
     3. Caches results for performance
     """
     
-    def __init__(self, relationships: List[Dict], confidence_threshold: float = 0.7):
+    def __init__(
+        self, 
+        relationships: List[Dict], 
+        table_metadata: Dict[str, Dict] = None,
+        exclude_patterns: List[str] = None,
+        confidence_threshold: float = 0.7
+    ):
         """
         Initialize path finder with relationships.
         
         Args:
             relationships: List of relationship dicts from join graph
+            table_metadata: Dict of table metadata with semantic roles (NEW)
+            exclude_patterns: List of patterns to exclude from paths (NEW)
             confidence_threshold: Minimum confidence to include a relationship
         """
         self.relationships = relationships
         self.confidence_threshold = confidence_threshold
+        self.table_metadata = table_metadata or {}
+        self.exclude_patterns = exclude_patterns or []
         self._graph = self._build_graph()
         self._cache: Dict[Tuple[str, str], Optional[List[Dict]]] = {}
         
         logger.info(f"Initialized JoinPathFinder with {len(self._graph)} nodes")
+    
+    def _should_exclude_table(self, table_name: str) -> bool:
+        """
+        Check if table should be excluded from paths.
+        
+        Args:
+            table_name: Table name to check
+            
+        Returns:
+            True if table should be excluded
+        """
+        # Check semantic role - exclude satellites
+        metadata = self.table_metadata.get(table_name, {})
+        if metadata.get("role") == "satellite":
+            return True
+        
+        # Check exclusion patterns
+        for pattern in self.exclude_patterns:
+            if pattern.lower() in table_name.lower():
+                return True
+        
+        return False
     
     def _build_graph(self) -> Dict[str, List[Tuple[str, Dict]]]:
         """
@@ -54,6 +86,10 @@ class JoinPathFinder:
             
             from_table = rel["from_table"]
             to_table = rel["to_table"]
+            
+            # Skip relationships involving excluded tables
+            if self._should_exclude_table(from_table) or self._should_exclude_table(to_table):
+                continue
             
             # Add bidirectional edges (joins work both ways)
             graph[from_table].append((to_table, rel))
@@ -121,6 +157,10 @@ class JoinPathFinder:
             # Explore neighbors
             for neighbor, rel in self._graph.get(current, []):
                 if neighbor in visited:
+                    continue
+                
+                # Skip excluded tables in intermediate hops
+                if self._should_exclude_table(neighbor):
                     continue
                 
                 # Weight: prefer higher confidence, shorter paths

@@ -10,15 +10,85 @@ def find_bridge_tables(
     selected_tables: set,
     relationships: List[Dict[str, Any]],
     join_graph_tables: dict,
+    table_metadata: dict = None,
+    exclude_patterns: List[str] = None,
     confidence_threshold: float = 0.9
 ) -> set:
     """
     Find bridge tables that connect two selected tables with high confidence.
+    
+    Args:
+        selected_tables: Set of already selected tables
+        relationships: List of relationship dicts from join graph
+        join_graph_tables: Dict of all tables in join graph
+        table_metadata: Dict of table metadata with semantic roles (NEW)
+        exclude_patterns: List of patterns to exclude from bridges (NEW)
+        confidence_threshold: Minimum confidence for relationships
+        
+    Returns:
+        Set of bridge table names
+        
+    Changes from original:
+        - Hard-filter satellite tables (role='satellite') before connectivity analysis
+        - Apply exclude_patterns during discovery (not after)
+        - Prioritize content_child and bridge roles over satellite
+        - Check for direct paths first - only add bridges if no direct path exists
+        - Exclude assignment/configuration tables unless explicitly needed
     """
     bridge_tables = set()
     selected_lower = {t.lower() for t in selected_tables}
     table_name_map = {t.lower(): t for t in join_graph_tables.keys()}
     table_connections: Dict[str, set] = {}
+    table_metadata = table_metadata or {}
+    exclude_patterns = exclude_patterns or []
+    
+    # Build a map of direct connections between selected tables
+    direct_connections: Dict[str, Set[str]] = {}
+    for rel in relationships:
+        from_table_orig = rel.get("from_table", "")
+        to_table_orig = rel.get("to_table", "")
+        from_table_lower = from_table_orig.lower()
+        to_table_lower = to_table_orig.lower()
+        confidence = float(rel.get("confidence", 0))
+        
+        if confidence < confidence_threshold:
+            continue
+            
+        # Track direct connections between selected tables
+        if from_table_lower in selected_lower and to_table_lower in selected_lower:
+            if from_table_orig not in direct_connections:
+                direct_connections[from_table_orig] = set()
+            if to_table_orig not in direct_connections:
+                direct_connections[to_table_orig] = set()
+            direct_connections[from_table_orig].add(to_table_orig)
+            direct_connections[to_table_orig].add(from_table_orig)
+
+    def should_exclude_table(table_name: str) -> bool:
+        """Check if table should be excluded from bridge consideration."""
+        # Check semantic role - exclude satellites
+        metadata = table_metadata.get(table_name, {})
+        role = metadata.get("role")
+        
+        if role == "satellite":
+            logger.debug(f"Excluding satellite table '{table_name}' from bridge discovery")
+            return True
+        
+        # Exclude assignment/configuration tables - they are not true bridges
+        if role in ("assignment", "configuration"):
+            logger.debug(f"Excluding {role} table '{table_name}' from bridge discovery")
+            return True
+        
+        # Check exclusion patterns
+        for pattern in exclude_patterns:
+            if pattern.lower() in table_name.lower():
+                logger.debug(f"Excluding table '{table_name}' matching pattern '{pattern}'")
+                return True
+        
+        return False
+    
+    def has_direct_path(table1: str, table2: str) -> bool:
+        """Check if two tables have a direct relationship."""
+        return table2 in direct_connections.get(table1, set())
 
     for rel in relationships:
         from_table_orig = rel.get("from_table", "")
@@ -28,6 +98,10 @@ def find_bridge_tables(
         confidence = float(rel.get("confidence", 0))
 
         if confidence < confidence_threshold:
+            continue
+
+        # Check if either table should be excluded
+        if should_exclude_table(from_table_orig) or should_exclude_table(to_table_orig):
             continue
 
         if from_table_lower in selected_lower and to_table_lower not in selected_lower:
@@ -40,6 +114,7 @@ def find_bridge_tables(
                 table_connections[from_table_lower] = set()
             table_connections[from_table_lower].add(to_table_orig)
 
+    # Score tables by connectivity and semantic role
     for table_name_lower, connected_tables in table_connections.items():
         canonical_connected = {
             table_name_map.get(t.lower(), t) for t in connected_tables if t
@@ -47,9 +122,52 @@ def find_bridge_tables(
         if len(canonical_connected) >= 2:
             if table_name_lower in table_name_map:
                 original_name = table_name_map[table_name_lower]
+                
+                # Double-check exclusion (defensive)
+                if should_exclude_table(original_name):
+                    continue
+                
+                # Get semantic role and metadata
+                metadata = table_metadata.get(original_name, {})
+                role = metadata.get("role", "unknown")
+                exclude_as_bridge_for = metadata.get("exclude_as_bridge_for", [])
+                
+                # Check if this table is explicitly excluded as a bridge for any connected tables
+                if exclude_as_bridge_for:
+                    should_skip = False
+                    for excluded_table in exclude_as_bridge_for:
+                        if excluded_table in canonical_connected:
+                            logger.debug(
+                                f"Skipping bridge table '{original_name}' - explicitly excluded "
+                                f"for table '{excluded_table}' in metadata"
+                            )
+                            should_skip = True
+                            break
+                    if should_skip:
+                        continue
+                
+                # Check if direct paths already exist between all connected tables
+                # If so, this bridge is not needed
+                connected_list = list(canonical_connected)
+                all_have_direct = True
+                for i, t1 in enumerate(connected_list):
+                    for t2 in connected_list[i + 1:]:
+                        if not has_direct_path(t1, t2):
+                            all_have_direct = False
+                            break
+                    if not all_have_direct:
+                        break
+                
+                if all_have_direct:
+                    logger.info(
+                        f"Skipping bridge table '{original_name}' - direct paths already exist "
+                        f"between connected tables: {list(canonical_connected)}"
+                    )
+                    continue
+                
                 bridge_tables.add(original_name)
                 logger.info(
-                    f"Found bridge table '{original_name}' connecting "
+                    f"Found bridge table '{original_name}' (role: {role}) connecting "
                     f"{len(canonical_connected)} selected tables: {list(canonical_connected)}"
                 )
 

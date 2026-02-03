@@ -36,7 +36,9 @@ def _build_sql_examples(business_entities: List[str]) -> str:
 - "List all {entity1} names" ← Queries business entities
 - "Do the same but show the name instead of the ID" (if previous query was SQL)
 - "Show me the same data with {entity2} names" (if previous query was SQL)
-- "Add the {entity3} to the previous result" (if previous query was SQL)"""
+- "Add the {entity3} to the previous result" (if previous query was SQL)
+- "For that {entity1} I want the {entity2}" ← IMPORTANT: Follow-up asking for related data = SQL
+- "I want questions and answers for that {entity3}" ← IMPORTANT: Retrieve related data = SQL"""
 
 
 def _build_rag_examples(business_entities: List[str]) -> str:
@@ -165,8 +167,9 @@ IMPORTANT RULES:
 5. If asking about GENERAL KNOWLEDGE or non-business topics → GENERAL
 6. If unsure between SQL and RAG, prefer SQL for data queries, RAG for system usage queries
 7. If question doesn't clearly fit SQL or RAG → GENERAL
-8. **CRITICAL**: If the conversation context shows a previous SQL query was just executed, and the current question references "the previous result", "the same", "that data", "from above", etc., classify as SQL
-9. Follow-up questions that modify a previous query result (e.g., "show X instead of Y", "add column Z") should be classified the same as the original query{recent_context}
+8. **CRITICAL**: If the conversation context shows a previous SQL query was just executed, and the current question references "that [entity]", "for that [entity]", "the [entity]", "from above", etc., classify as SQL
+9. **CRITICAL**: Follow-up questions that want to retrieve/show/display data related to a previous query result (e.g., "show questions and answers for that inspection", "get the details", "I want [data] for that [entity]") should be classified as SQL
+10. **CRITICAL**: "I want [data] for/from [entity]" means "retrieve/show me [data]" → SQL (not "how to create"){recent_context}
 Current question: {question}
 
 Respond with ONLY one word: SQL, RAG, or GENERAL"""

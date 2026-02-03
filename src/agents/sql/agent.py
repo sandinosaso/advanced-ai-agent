@@ -32,9 +32,15 @@ class SQLGraphAgent:
             max_completion_tokens=settings.max_output_tokens,
         )
         self.join_graph = load_join_graph()
+        
+        # Extract table metadata for semantic filtering
+        table_metadata = self.join_graph.get("table_metadata", {})
+        logger.info(f"Loaded table metadata for {len(table_metadata)} tables")
 
         self.path_finder = JoinPathFinder(
             self.join_graph["relationships"],
+            table_metadata=table_metadata,
+            exclude_patterns=[],  # Will be set per-query from domain
             confidence_threshold=settings.sql_confidence_threshold,
         )
 
