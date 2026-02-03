@@ -1,0 +1,290 @@
+{
+  "version": 1,
+  "description": "Domain vocabulary registry mapping business concepts to database schema",
+  "terms": {
+    "crane": {
+      "entity": "asset",
+      "description": "Heavy lifting equipment used in construction and industrial settings",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95,
+          "exclude_columns": {
+            "asset": ["customerLocationId"]
+          }
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        },
+        "fallback": {
+          "table": "dynamicAttributeValue",
+          "conditions": {
+            "entityName": "asset",
+            "dynamicAttribute.key": ["equipment_category", "equipment_type"]
+          },
+          "confidence": 0.3
+        }
+      }
+    },
+    "forklift": {
+      "entity": "asset",
+      "description": "Material handling equipment for lifting and moving goods",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        }
+      }
+    },
+    "hoist": {
+      "entity": "asset",
+      "description": "Mechanical device for lifting and lowering loads",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        }
+      }
+    },
+    "action_item": {
+      "entity": "inspection_finding",
+      "description": "Inspection findings that require corrective action",
+      "resolution": {
+        "primary": {
+          "table": "inspectionQuestionAnswer",
+          "column": "isActionItem",
+          "match_type": "boolean",
+          "value": true,
+          "confidence": 1.0
+        }
+      }
+    },
+    "unsafe": {
+      "entity": "inspection_finding",
+      "description": "Safety issues or hazards identified during inspections",
+      "resolution": {
+        "primary": {
+          "table": "inspectionQuestionAnswer",
+          "column": "isActionItem",
+          "match_type": "boolean",
+          "value": true,
+          "confidence": 0.8,
+          "note": "Unsafe conditions typically generate action items"
+        }
+      }
+    },
+    "truck": {
+      "entity": "asset",
+      "description": "Commercial vehicles used for transportation",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        }
+      }
+    },
+    "trailer": {
+      "entity": "asset",
+      "description": "Unpowered vehicles towed by trucks",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        }
+      }
+    },
+    "generator": {
+      "entity": "asset",
+      "description": "Power generation equipment",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        }
+      }
+    },
+    "compressor": {
+      "entity": "asset",
+      "description": "Air compression equipment",
+      "resolution": {
+        "primary": {
+          "table": "asset",
+          "columns": ["name", "manufacturer", "modelNumber"],
+          "match_type": "text_search",
+          "confidence": 0.95
+        },
+        "secondary": {
+          "table": "assetType",
+          "column": "name",
+          "match_type": "text_search",
+          "confidence": 0.5
+        }
+      }
+    },
+    "inspection_questions": {
+      "entity": "inspection_form_questions",
+      "description": "Explicit inspection FORM CONTENT: individual questions and their recorded answers. Requires the user to explicitly ask for questions, answers, or form details.",
+      "requires_explicit_terms": ["question", "questions", "answer", "answers", "form", "checklist"],
+      "requires_atomic_signals": ["inspection"],
+      "resolution": {
+        "primary": {
+          "tables": [
+            "inspection",
+            "inspectionTemplateWorkOrder",
+            "inspectionTemplate",
+            "inspectionSection",
+            "inspectionQuestionGroup",
+            "inspectionQuestion"
+          ],
+          "match_type": "structural",
+          "confidence": 0.95,
+          "note": "Always include both tables together - they form a parent-child relationship",
+          "bridge_tables": ["inspectionQuestionGroup"],
+          "exclude_bridge_patterns": ["QAAttachment", "Signature", "Guidance", "TypeOption", "Configuration", "TemplateWorkOrder"]
+        }
+      }
+    },
+    "inspection_questions_and_answers": {
+      "entity": "inspection_form_questions_and_answers",
+      "description": "Explicit inspection FORM CONTENT: all questions and their recorded answers for a specific inspection. Requires the user to explicitly ask for questions, answers, or form details.",
+      "requires_explicit_terms": ["question", "questions", "answer", "answers", "form", "checklist"],
+      "requires_atomic_signals": ["inspection"],
+      "resolution": {
+        "primary": {
+          "tables": [
+            "inspection",
+            "inspectionTemplateWorkOrder",
+            "inspectionTemplate",
+            "inspectionSection",
+            "inspectionQuestionGroup",
+            "inspectionQuestion",
+            "inspectionQuestionAnswer"
+          ],
+          "match_type": "structural",
+          "confidence": 1.0,
+          "note": "This is a hierarchical inspection flow: inspection → template → sections → groups → questions → answers",
+          "anchor_table": "inspection",
+          "bridge_tables": [
+            "inspectionTemplateWorkOrder",
+            "inspectionTemplate",
+            "inspectionSection",
+            "inspectionQuestionGroup",
+            "inspectionQuestion",
+            "inspectionQuestionAnswer"
+          ],
+          "exclude_bridge_patterns": [
+            "inspectionConfiguration",
+            "inspectionGuidance",
+            "inspectionSignature",
+            "inspectionTypeOption",
+            "attachment",
+            "media"
+          ],
+          "required_join_constraints": [
+            {
+              "table": "inspectionQuestionAnswer",
+              "conditions": [
+                "inspectionQuestionAnswer.inspectionId = inspection.id",
+                "inspectionQuestionAnswer.inspectionQuestionId = inspectionQuestion.id"
+              ],
+              "note": "Answers must be scoped to both inspection instance and question template to prevent cross-contamination"
+            }
+          ]
+        }
+      }
+    },
+    "safety_questions": {
+      "entity": "safety_detail",
+      "description": "Explicit safety FORM CONTENT: individual questions and their recorded answers. Requires the user to explicitly ask for questions, answers, or form details.",
+      "requires_explicit_terms": ["question", "questions", "answer", "answers", "form", "checklist"],
+      "requires_atomic_signals": ["safety"],
+      "resolution": {
+        "primary": {
+          "tables": ["safety", "safetyQuestion", "safetyQuestionAnswer"],
+          "match_type": "structural",
+          "confidence": 0.95,
+          "note": "Always include both tables together - they form a parent-child relationship",
+          "required_join_constraints": [
+            {
+              "table": "safetyQuestionAnswer",
+              "conditions": [
+                "safetyQuestionAnswer.safetyId = safety.id",
+                "safetyQuestionAnswer.safetyQuestionId = safetyQuestion.id"
+              ],
+              "note": "Answers must be scoped to both safety instance and question template"
+            }
+          ]
+        }
+      }
+    },
+    "service_questions": {
+      "entity": "service_detail",
+      "description": "Explicit service FORM CONTENT: individual questions and their recorded answers. Requires the user to explicitly ask for questions, answers, or form details.",
+      "requires_explicit_terms": ["question", "questions", "answer", "answers", "form", "checklist"],
+      "requires_atomic_signals": ["service"],
+      "resolution": {
+        "primary": {
+          "tables": ["service", "serviceQuestion", "serviceQuestionAnswer"],
+          "match_type": "structural",
+          "confidence": 0.95,
+          "note": "Always include both tables together - they form a parent-child relationship",
+          "required_join_constraints": [
+            {
+              "table": "serviceQuestionAnswer",
+              "conditions": [
+                "serviceQuestionAnswer.serviceId = service.id",
+                "serviceQuestionAnswer.serviceQuestionId = serviceQuestion.id"
+              ],
+              "note": "Answers must be scoped to both service instance and question template"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,105 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment Variables
+.env
+*.env
+!.env.example
+
+# Data & Logs
+data/checkpoints/*
+data/vector_store/*
+data/embeddings_cache/*
+data/logs/*
+*.log
+
+# Database files (SQLite, ChromaDB, etc.)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+conversations.db
+conversations.db-*
+chroma.sqlite3
+chroma.sqlite3-*
+
+# Google Credentials
+*credentials*.json
+!*credentials.example.json
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Test Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff
+.ruff_cache/
+
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Nx Cache and modules
+node_modules/
+.nx/installation
+.nx/cache
+.nx/workspace-data

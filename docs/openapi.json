@@ -1,0 +1,332 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Field Service Intelligence Agent API",
+    "description": "Internal streaming chat API for the AI-powered field service assistant. Used by the Node.js BFF layer; responses are streamed via Server-Sent Events (SSE). The Orchestrator routes questions to SQL, RAG, or General agents and streams semantic events back.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "API Support"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8000",
+      "description": "Local development"
+    }
+  ],
+  "tags": [
+    { "name": "root", "description": "API information" },
+    { "name": "health", "description": "Service health" },
+    { "name": "internal", "description": "Internal chat streaming (BFF only)" }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "tags": ["root"],
+        "summary": "Root",
+        "description": "Returns API information and available endpoints.",
+        "operationId": "root",
+        "responses": {
+          "200": {
+            "description": "API info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "service": { "type": "string", "example": "Field Service Intelligence Agent API" },
+                    "version": { "type": "string", "example": "1.0.0" },
+                    "status": { "type": "string", "example": "running" },
+                    "docs": { "type": "string", "example": "/docs" },
+                    "endpoints": {
+                      "type": "object",
+                      "properties": {
+                        "health": { "type": "string", "example": "/health" },
+                        "chat_stream": { "type": "string", "example": "/api/chat/stream" }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "service": "Field Service Intelligence Agent API",
+                  "version": "1.0.0",
+                  "status": "running",
+                  "docs": "/docs",
+                  "endpoints": {
+                    "health": "/health",
+                    "chat_stream": "/api/chat/stream"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": ["health"],
+        "summary": "Health check",
+        "description": "Verify the service is running. Returns status, service name, and version.",
+        "operationId": "health_check",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" },
+                "example": {
+                  "status": "healthy",
+                  "service": "fsia-api",
+                  "version": "1.0.0"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/chat/stream": {
+      "post": {
+        "tags": ["internal"],
+        "summary": "Chat stream (SSE)",
+        "description": "Internal streaming endpoint for agent execution. **Called by:** Node.js BFF (not browsers directly). Executes the Orchestrator Agent and streams semantic events as Server-Sent Events. The response is a continuous stream; each line is `data: <json>`. Event types: `route_decision`, `tool_start`, `token`, `complete`, `error`.",
+        "operationId": "chat_stream",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChatStreamRequest" },
+              "examples": {
+                "sql_question": {
+                  "summary": "Database question",
+                  "value": {
+                    "input": {
+                      "message": "How many technicians are active?"
+                    },
+                    "conversation": {
+                      "id": "conv-uuid-123",
+                      "user_id": "user-456",
+                      "company_id": "company-789"
+                    }
+                  }
+                },
+                "rag_question": {
+                  "summary": "Policy / knowledge question",
+                  "value": {
+                    "input": {
+                      "message": "What are the overtime rules?"
+                    },
+                    "conversation": {
+                      "id": "conv-uuid-456",
+                      "user_id": "user-789",
+                      "company_id": "company-789"
+                    }
+                  }
+                },
+                "general_question": {
+                  "summary": "General question",
+                  "value": {
+                    "input": {
+                      "message": "What is machine learning?"
+                    },
+                    "conversation": {
+                      "id": "conv-uuid-789",
+                      "user_id": "user-012",
+                      "company_id": "company-789"
+                    }
+                  }
+                },
+                "domain_question": {
+                  "summary": "Domain / business question",
+                  "value": {
+                    "input": {
+                      "message": "Show me cranes with action items"
+                    },
+                    "conversation": {
+                      "id": "conv-uuid-abc",
+                      "user_id": "user-456",
+                      "company_id": "company-789"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events stream. Each event is a line: `data: <JSON>`. Parse each line after `data: ` to get the event object.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "SSE stream; each line is data: <JSON>",
+                  "example": "data: {\"event\":\"route_decision\",\"route\":\"sql\"}\n\ndata: {\"event\":\"tool_start\",\"tool\":\"sql_agent\"}\n\ndata: {\"event\":\"token\",\"channel\":\"final\",\"content\":\"There\"}\n\ndata: {\"event\":\"token\",\"channel\":\"final\",\"content\":\" are 10\"}\n\ndata: {\"event\":\"complete\",\"stats\":{\"tokens\":15,\"conversation_id\":\"conv-uuid-123\"}}\n\n"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation error (e.g. missing or invalid input/conversation)"
+          },
+          "500": {
+            "description": "Server error; stream may end with an `error` event"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AgentInput": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "The user's question or message"
+          }
+        },
+        "example": {
+          "message": "How many technicians are active?"
+        }
+      },
+      "ConversationContext": {
+        "type": "object",
+        "required": ["id", "user_id", "company_id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Conversation/session ID (used as thread_id for checkpointing)"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "Authenticated user ID"
+          },
+          "company_id": {
+            "type": "string",
+            "description": "Tenant/company ID for data isolation"
+          }
+        },
+        "example": {
+          "id": "conv-uuid-123",
+          "user_id": "user-456",
+          "company_id": "company-789"
+        }
+      },
+      "ChatStreamRequest": {
+        "type": "object",
+        "required": ["input", "conversation"],
+        "properties": {
+          "input": { "$ref": "#/components/schemas/AgentInput" },
+          "conversation": { "$ref": "#/components/schemas/ConversationContext" }
+        },
+        "example": {
+          "input": { "message": "How many technicians are active?" },
+          "conversation": {
+            "id": "conv-uuid-123",
+            "user_id": "user-456",
+            "company_id": "company-789"
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": ["status", "service", "version"],
+        "properties": {
+          "status": { "type": "string", "description": "Health status", "example": "healthy" },
+          "service": { "type": "string", "description": "Service name", "example": "fsia-api" },
+          "version": { "type": "string", "description": "API version", "example": "1.0.0" }
+        }
+      },
+      "StreamEvent": {
+        "type": "object",
+        "required": ["event"],
+        "description": "One event in the SSE stream. Parse from each `data: <json>` line.",
+        "properties": {
+          "event": {
+            "type": "string",
+            "enum": ["token", "tool_start", "route_decision", "complete", "error"],
+            "description": "Event type"
+          },
+          "channel": {
+            "type": "string",
+            "enum": ["classify", "sql_agent", "rag_agent", "general_agent", "final"],
+            "description": "Present for token events; indicates which agent/phase produced the content"
+          },
+          "content": {
+            "type": "string",
+            "description": "Present for token events; raw text chunk"
+          },
+          "structured_data": {
+            "type": "array",
+            "items": { "type": "object" },
+            "description": "Present on first final token when SQL returns tabular data; BFF can render as markdown table"
+          },
+          "tool": {
+            "type": "string",
+            "enum": ["sql_agent", "rag_agent", "general_agent"],
+            "description": "Present for tool_start events"
+          },
+          "route": {
+            "type": "string",
+            "enum": ["sql", "rag", "general"],
+            "description": "Present for route_decision events"
+          },
+          "stats": {
+            "type": "object",
+            "description": "Present for complete events",
+            "properties": {
+              "tokens": { "type": "integer" },
+              "conversation_id": { "type": "string" }
+            }
+          },
+          "error": {
+            "type": "string",
+            "description": "Present for error events"
+          }
+        },
+        "examples": {
+          "route_decision": {
+            "summary": "Routing decision",
+            "value": { "event": "route_decision", "route": "sql" }
+          },
+          "tool_start": {
+            "summary": "Tool started",
+            "value": { "event": "tool_start", "tool": "sql_agent" }
+          },
+          "token": {
+            "summary": "Content token",
+            "value": { "event": "token", "channel": "final", "content": "There are 10 technicians." }
+          },
+          "token_with_structured_data": {
+            "summary": "First final token with table data",
+            "value": {
+              "event": "token",
+              "channel": "final",
+              "content": "Here are the results:\n\n",
+              "structured_data": [
+                { "name": "Crane #42", "status": "Active", "lastInspection": "2025-01-15" },
+                { "name": "Forklift A1", "status": "Active", "lastInspection": "2025-01-10" }
+              ]
+            }
+          },
+          "complete": {
+            "summary": "Stream finished",
+            "value": {
+              "event": "complete",
+              "stats": { "tokens": 42, "conversation_id": "conv-uuid-123" }
+            }
+          },
+          "error": {
+            "summary": "Error",
+            "value": { "event": "error", "error": "Database connection failed" }
+          }
+        }
+      }
+    }
+  }
+}

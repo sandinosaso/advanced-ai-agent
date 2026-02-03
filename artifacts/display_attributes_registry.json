@@ -1,0 +1,913 @@
+{
+  "version": 1,
+  "description": "Defines human-readable display attributes for tables and concepts",
+  "tables": {
+    "asset": {
+      "display_columns": [
+        "id",
+        "name",
+        "modelNumber",
+        "serialNumber"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "assetType": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "attachment": {
+      "display_columns": [
+        "id",
+        "description"
+      ],
+      "primary_label": [
+        "description"
+      ]
+    },
+    "attachmentType": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "crewWorkDay": {
+      "display_columns": [
+        "id",
+        "date"
+      ],
+      "primary_label": []
+    },
+    "customer": {
+      "display_columns": [
+        "id",
+        "customerNo",
+        "zipCode",
+        "countryCode",
+        "faxNo",
+        "email",
+        "phone",
+        "isActive"
+      ],
+      "primary_label": []
+    },
+    "customerContact": {
+      "display_columns": [
+        "id",
+        "name",
+        "email",
+        "phone"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "customerLocation": {
+      "display_columns": [
+        "id",
+        "shipToCode",
+        "shipToZipCode",
+        "shipToCountryCode",
+        "phone"
+      ],
+      "primary_label": []
+    },
+    "dynamicAttribute": {
+      "display_columns": [
+        "id",
+        "name",
+        "label",
+        "description"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "employee": {
+      "display_columns": [
+        "id",
+        "firstName",
+        "lastName",
+        "email",
+        "phone",
+        "isActive"
+      ],
+      "primary_label": [
+        "firstName",
+        "lastName"
+      ]
+    },
+    "employeeRole": {
+      "display_columns": [
+        "id",
+        "name",
+        "isActive"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "employeeRolePerDiemRule": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "employeeRoleScope": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "equipmentCategory": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "equipmentOption": {
+      "display_columns": [
+        "id",
+        "name",
+        "isActive"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "expense": {
+      "display_columns": [
+        "id",
+        "description",
+        "status",
+        "date"
+      ],
+      "primary_label": [
+        "description"
+      ]
+    },
+    "expenseAttachment": {
+      "display_columns": [
+        "id",
+        "description"
+      ],
+      "primary_label": [
+        "description"
+      ]
+    },
+    "expenseType": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "inspection": {
+      "display_columns": [
+        "id",
+        "date",
+        "status",
+        "completedAt"
+      ],
+      "primary_label": [],
+      "template_relationship": {
+        "template_table": "inspectionTemplate",
+        "via_tables": [
+          "inspectionTemplateWorkOrder"
+        ],
+        "template_columns": [
+          "name"
+        ],
+        "description": "Inspection name comes from inspectionTemplate.name"
+      }
+    },
+    "inspectionCertificationStatusOption": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "inspectionQAAttachment": {
+      "display_columns": [
+        "id",
+        "description"
+      ],
+      "primary_label": [
+        "description"
+      ]
+    },
+    "inspectionQAAttachmentType": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "inspectionQuestion": {
+      "display_columns": [
+        "id",
+        "questionOptions"
+      ],
+      "primary_label": []
+    },
+    "inspectionQuestionAnswerOption": {
+      "display_columns": [
+        "id",
+        "inspectionQuestionOptionId"
+      ],
+      "primary_label": []
+    },
+    "inspectionQuestionGroup": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "inspectionQuestionType": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "inspectionQuestionTypeOptionCategory": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "inspectionSection": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "inspectionTemplate": {
+      "display_columns": [
+        "id",
+        "name",
+        "status"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "inspectionTemplateWorkOrder": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "jobType": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "nonJobTime": {
+      "display_columns": [
+        "id",
+        "nonJobTimeTypeId",
+        "date"
+      ],
+      "primary_label": []
+    },
+    "nonJobTimeType": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "note": {
+      "display_columns": [
+        "id",
+        "noteTypeId"
+      ],
+      "primary_label": []
+    },
+    "noteType": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "package": {
+      "display_columns": [
+        "id",
+        "name",
+        "isActive"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "payrollBatch": {
+      "display_columns": [
+        "id",
+        "name",
+        "notes",
+        "status"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "payrollEntry": {
+      "display_columns": [
+        "id",
+        "status",
+        "date"
+      ],
+      "primary_label": []
+    },
+    "payrollRule": {
+      "display_columns": [
+        "id",
+        "name",
+        "description",
+        "isActive"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "quote": {
+      "display_columns": [
+        "id",
+        "description",
+        "quoteNumber",
+        "jobNotes"
+      ],
+      "primary_label": [
+        "description"
+      ]
+    },
+    "quoteItem": {
+      "display_columns": [
+        "id",
+        "description"
+      ],
+      "primary_label": [
+        "description"
+      ]
+    },
+    "quoteStatus": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "quoteStatusCategory": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "recurringWorkOrderRule": {
+      "display_columns": [
+        "id",
+        "description",
+        "isActive"
+      ],
+      "primary_label": [
+        "description"
+      ]
+    },
+    "safety": {
+      "display_columns": [
+        "id",
+        "noSignatureReason",
+        "status",
+        "date"
+      ],
+      "primary_label": [],
+      "template_relationship": {
+        "template_table": "safetyTemplate",
+        "via_tables": [
+          "safetyTemplateWorkOrder"
+        ],
+        "template_columns": [
+          "name"
+        ],
+        "description": "Safety name comes from safetyTemplate.name"
+      }
+    },
+    "safetyQAAttachment": {
+      "display_columns": [
+        "id",
+        "description"
+      ],
+      "primary_label": [
+        "description"
+      ]
+    },
+    "safetyQAAttachmentType": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "safetyQuestion": {
+      "display_columns": [
+        "id",
+        "questionOptions"
+      ],
+      "primary_label": []
+    },
+    "safetyQuestionAnswerOption": {
+      "display_columns": [
+        "id",
+        "safetyQuestionOptionId"
+      ],
+      "primary_label": []
+    },
+    "safetyQuestionGroup": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "safetyQuestionType": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "safetySection": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "safetyTemplate": {
+      "display_columns": [
+        "id",
+        "name",
+        "status"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "safetyTemplateConfiguration": {
+      "display_columns": [
+        "id",
+        "isEmailNotificationEnabled"
+      ],
+      "primary_label": []
+    },
+    "service": {
+      "display_columns": [
+        "id",
+        "noSignatureReason",
+        "status",
+        "date"
+      ],
+      "primary_label": [],
+      "template_relationship": {
+        "template_table": "serviceTemplate",
+        "via_tables": [
+          "serviceTemplateWorkOrder"
+        ],
+        "template_columns": [
+          "name"
+        ],
+        "description": "Service name comes from serviceTemplate.name"
+      }
+    },
+    "serviceCertificationStatusOption": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "serviceLocation": {
+      "display_columns": [
+        "id",
+        "name",
+        "isActive"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "serviceQAAttachment": {
+      "display_columns": [
+        "id",
+        "description"
+      ],
+      "primary_label": [
+        "description"
+      ]
+    },
+    "serviceQAAttachmentType": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "serviceQuestion": {
+      "display_columns": [
+        "id",
+        "questionOptions"
+      ],
+      "primary_label": []
+    },
+    "serviceQuestionAnswerOption": {
+      "display_columns": [
+        "id",
+        "serviceQuestionOptionId"
+      ],
+      "primary_label": []
+    },
+    "serviceQuestionGroup": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "serviceQuestionType": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "serviceQuestionTypeOptionCategory": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "serviceSection": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "serviceTemplate": {
+      "display_columns": [
+        "id",
+        "name",
+        "status"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "serviceTemplateWorkOrder": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "setting": {
+      "display_columns": [
+        "id",
+        "name",
+        "description",
+        "status"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "smartReport": {
+      "display_columns": [
+        "id",
+        "name",
+        "description"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "syncLog": {
+      "display_columns": [
+        "id",
+        "status"
+      ],
+      "primary_label": []
+    },
+    "user": {
+      "display_columns": [
+        "id",
+        "firstName",
+        "lastName",
+        "isNonBillable",
+        "email",
+        "isActive"
+      ],
+      "primary_label": [
+        "firstName",
+        "lastName"
+      ]
+    },
+    "userRole": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "userRoleScope": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "workOrder": {
+      "display_columns": [
+        "id",
+        "description",
+        "workOrderNumber"
+      ],
+      "primary_label": [
+        "description"
+      ]
+    },
+    "workOrderCategory": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "workOrderCloseOut": {
+      "display_columns": [
+        "id",
+        "notSignatureReason"
+      ],
+      "primary_label": []
+    },
+    "workOrderStatus": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "workTimeType": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    },
+    "workTimeTypeExceptionRule": {
+      "display_columns": [
+        "id",
+        "name"
+      ],
+      "primary_label": [
+        "name"
+      ]
+    }
+  },
+  "concepts": {
+    "employee": {
+      "tables": [
+        "employee"
+      ],
+      "display_override": {
+        "employee": [
+          "id",
+          "firstName",
+          "lastName",
+          "email"
+        ]
+      },
+      "description": "When asking about employees, always show firstName and lastName"
+    },
+    "user": {
+      "tables": [
+        "user"
+      ],
+      "display_override": {
+        "user": [
+          "id",
+          "firstName",
+          "lastName",
+          "email"
+        ]
+      },
+      "description": "When asking about users, always show firstName and lastName"
+    },
+    "workorder_status": {
+      "tables": [
+        "workOrder",
+        "workOrderStatus"
+      ],
+      "display_override": {
+        "workOrderStatus": [
+          "id",
+          "name"
+        ]
+      },
+      "required_joins": [
+        "workOrder.workOrderStatusId = workOrderStatus.id"
+      ],
+      "description": "When asking about workorder status, show workOrderStatus.name not just the ID"
+    },
+    "inspection": {
+      "tables": [
+        "inspection",
+        "inspectionTemplateWorkOrder",
+        "inspectionTemplate"
+      ],
+      "display_override": {
+        "inspection": [
+          "id",
+          "date",
+          "status"
+        ],
+        "inspectionTemplate": [
+          "name"
+        ]
+      },
+      "required_joins": [
+        "inspection.inspectionTemplateWorkOrderId = inspectionTemplateWorkOrder.id",
+        "inspectionTemplateWorkOrder.inspectionTemplateId = inspectionTemplate.id"
+      ],
+      "description": "Inspections should include the template name for context"
+    },
+    "service": {
+      "tables": [
+        "service",
+        "serviceTemplateWorkOrder",
+        "serviceTemplate"
+      ],
+      "display_override": {
+        "service": [
+          "id",
+          "date",
+          "status"
+        ],
+        "serviceTemplate": [
+          "name"
+        ]
+      },
+      "required_joins": [
+        "service.serviceTemplateWorkOrderId = serviceTemplateWorkOrder.id",
+        "serviceTemplateWorkOrder.serviceTemplateId = serviceTemplate.id"
+      ],
+      "description": "Services should include the template name for context"
+    },
+    "safety": {
+      "tables": [
+        "safety",
+        "safetyTemplateWorkOrder",
+        "safetyTemplate"
+      ],
+      "display_override": {
+        "safety": [
+          "id",
+          "date",
+          "status"
+        ],
+        "safetyTemplate": [
+          "name"
+        ]
+      },
+      "required_joins": [
+        "safety.safetyTemplateWorkOrderId = safetyTemplateWorkOrder.id",
+        "safetyTemplateWorkOrder.safetyTemplateId = safetyTemplate.id"
+      ],
+      "description": "Safety records should include the template name for context"
+    },
+    "asset_type": {
+      "tables": [
+        "asset",
+        "assetType"
+      ],
+      "display_override": {
+        "assetType": [
+          "id",
+          "name"
+        ]
+      },
+      "required_joins": [
+        "asset.assetTypeId = assetType.id"
+      ],
+      "description": "When asking about asset types, show assetType.name not just the ID"
+    },
+    "customer_location": {
+      "tables": [
+        "customer",
+        "customerLocation"
+      ],
+      "display_override": {
+        "customer": [
+          "id",
+          "customerName"
+        ],
+        "customerLocation": [
+          "id",
+          "shipToName",
+          "shipToCode"
+        ]
+      },
+      "required_joins": [
+        "customerLocation.customerId = customer.id"
+      ],
+      "description": "Customer locations should show both customer and location names"
+    }
+  }
+}
