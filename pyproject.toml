@@ -29,6 +29,7 @@ dependencies = [
     "tiktoken>=0.8.0",
     "pyyaml>=6.0.1",
     "pymysql>=1.1.1",
+    "cryptography>=41.0.0",  # required by PyMySQL for MySQL 8 caching_sha2_password auth
 ]
 
 [project.optional-dependencies]
