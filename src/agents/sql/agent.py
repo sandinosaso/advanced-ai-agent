@@ -97,6 +97,7 @@ class SQLGraphAgent:
             "previous_results": previous_results,
             "is_followup": False,
             "referenced_ids": None,
+            "query_resolved": True,
         }
 
     def query(
@@ -124,4 +125,5 @@ class SQLGraphAgent:
             "structured_result": out.get("structured_result"),
             "tables_used": out.get("tables"),
             "sql_query": out.get("sql"),
+            "query_resolved": out.get("query_resolved", True),
         }

@@ -146,7 +146,8 @@ def execute_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
             return state
         else:
             logger.error(f"Max correction attempts reached. Final error: {error_str}")
-            state["result"] = f"Error executing query after {settings.sql_correction_max_attempts} correction attempts: {error_str}"
+            state["result"] = None
+            state["query_resolved"] = False
             return state
 
     is_empty = (

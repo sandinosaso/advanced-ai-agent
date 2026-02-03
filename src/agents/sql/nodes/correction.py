@@ -28,8 +28,9 @@ def correct_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     correction_attempts = state.get("sql_correction_attempts", 0)
 
     if correction_attempts >= settings.sql_correction_max_attempts:
-        logger.error(f"Max correction attempts ({settings.sql_correction_max_attempts}) reached")
-        state["result"] = f"Error: Could not fix SQL after {settings.sql_correction_max_attempts} attempts. Last error: {error_message}"
+        logger.error(f"Max correction attempts ({settings.sql_correction_max_attempts}) reached. Last error: {error_message[:200]}")
+        state["result"] = None
+        state["query_resolved"] = False
         return state
 
     state["sql_correction_attempts"] = correction_attempts + 1
@@ -201,5 +202,6 @@ CORRECTED SQL QUERY:"""
 
     except Exception as e:
         logger.error(f"Error in correction agent: {e}")
-        state["result"] = f"Error in correction agent: {str(e)}"
+        state["result"] = None
+        state["query_resolved"] = False
         return state

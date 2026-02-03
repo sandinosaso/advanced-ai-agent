@@ -27,3 +27,4 @@ class SQLGraphState(TypedDict):
     is_followup: bool
     referenced_ids: Optional[Dict[str, List]]
     referenced_entity: Optional[str]  # e.g. "inspection", "workOrder" - from follow-up detection
+    query_resolved: Optional[bool]  # False when we gave up after retries (DB/validation error)

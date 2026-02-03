@@ -35,10 +35,8 @@ def _route_after_validation(state: SQLGraphState) -> str:
         return "correct_sql"
     else:
         logger.error(f"Max correction attempts reached. Validation errors: {validation_errors}")
-        state["result"] = (
-            f"SQL validation failed after {settings.sql_correction_max_attempts} attempts. "
-            f"Errors: {' | '.join(validation_errors)}"
-        )
+        state["result"] = None
+        state["query_resolved"] = False
         return "finalize"
 
 
