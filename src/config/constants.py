@@ -9,19 +9,9 @@ from typing import Set
 # ============================================================================
 # Secure View Mappings
 # ============================================================================
-
-# Single Source of Truth: Tables that MUST use secure views
-SECURE_VIEW_MAP = {
-    "user": "secure_user",
-    "customerLocation": "secure_customerlocation",
-    "customerContact": "secure_customercontact",
-    "employee": "secure_employee",
-    "workOrder": "secure_workorder",
-    "customer": "secure_customer",
-}
-
-# Reverse mapping for validation
-SECURE_VIEWS = set(SECURE_VIEW_MAP.values())
+# NOTE: Secure view mappings are now dynamically discovered from the database
+# See src.utils.sql.secure_views for the implementation
+# Use get_secure_view_map() and get_secure_views() instead of these constants
 
 
 # ============================================================================

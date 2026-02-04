@@ -11,10 +11,15 @@ Architecture:
 
 Only SOME logical entities map to secure views. All others map directly to base tables.
 This mapping is explicit and defined here.
+
+Configuration is environment-driven:
+- SECURE_BASE_TABLES: Comma-separated list of base table names (from .env)
+- Secure views are auto-discovered from the database by matching secure_* pattern
 """
 
 import re
-from typing import Set, Optional
+import os
+from typing import Set, Optional, Dict
 from loguru import logger
 
 
@@ -22,17 +27,101 @@ from loguru import logger
 # Single Source of Truth: Tables that MUST use secure views
 # ============================================================================
 
-SECURE_VIEW_MAP = {
-    "user": "secure_user",
-    "customerLocation": "secure_customerlocation",
-    "customerContact": "secure_customercontact",
-    "employee": "secure_employee",
-    "workOrder": "secure_workorder",
-    "customer": "secure_customer",
-}
+# Global variable to store the dynamically discovered mapping
+_SECURE_VIEW_MAP: Optional[Dict[str, str]] = None
+_SECURE_VIEWS: Optional[Set[str]] = None
 
-# Reverse mapping for validation
-SECURE_VIEWS = set(SECURE_VIEW_MAP.values())
+
+def _normalize_table_name(name: str) -> str:
+    """Normalize table name to lowercase for case-insensitive comparison."""
+    return name.lower()
+
+
+def initialize_secure_view_map(db_connection) -> None:
+    """
+    Initialize the secure view map by discovering views from the database.
+    
+    This function:
+    1. Reads SECURE_BASE_TABLES from environment
+    2. Queries database for all tables/views starting with 'secure_'
+    3. Matches them to base tables using case-insensitive comparison
+    
+    Args:
+        db_connection: SQLAlchemy connection or engine to query database
+    """
+    global _SECURE_VIEW_MAP, _SECURE_VIEWS
+    
+    # Get base table names from environment
+    secure_base_tables_env = os.getenv("SECURE_BASE_TABLES", "user,customer,customerLocation,customerContact,employee,workOrder")
+    base_tables = [t.strip() for t in secure_base_tables_env.split(",") if t.strip()]
+    
+    logger.debug(f"Base tables requiring secure views (from env): {base_tables}")
+    
+    # Query database for all secure_* views
+    try:
+        from sqlalchemy import text
+        
+        # Get database name
+        db_name = os.getenv("DB_NAME", "crewos")
+        
+        query = text(f"""
+            SELECT TABLE_NAME 
+            FROM information_schema.TABLES 
+            WHERE TABLE_SCHEMA = :db_name 
+            AND TABLE_NAME LIKE 'secure_%'
+        """)
+        
+        result = db_connection.execute(query, {"db_name": db_name})
+        secure_views_in_db = [row[0] for row in result]
+        
+        logger.debug(f"Found {len(secure_views_in_db)} secure views in database: {secure_views_in_db}")
+        
+        # Build mapping: base_table -> secure_view (case-insensitive)
+        mapping = {}
+        
+        for base_table in base_tables:
+            base_normalized = _normalize_table_name(base_table)
+            
+            # Look for matching secure view
+            for secure_view in secure_views_in_db:
+                # Extract the part after 'secure_'
+                view_base = secure_view.replace("secure_", "", 1)
+                view_base_normalized = _normalize_table_name(view_base)
+                
+                if base_normalized == view_base_normalized:
+                    # Store with original casing from database
+                    mapping[base_table] = secure_view
+                    logger.debug(f"Mapped {base_table} -> {secure_view}")
+                    break
+            else:
+                logger.warning(f"⚠️  No secure view found for base table: {base_table}")
+        
+        _SECURE_VIEW_MAP = mapping
+        _SECURE_VIEWS = set(mapping.values())
+        
+        logger.success(f"✅ Initialized secure view map with {len(mapping)} mappings")
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize secure view map: {e}")
+        # Fallback to empty mapping
+        _SECURE_VIEW_MAP = {}
+        _SECURE_VIEWS = set()
+
+
+def get_secure_view_map() -> Dict[str, str]:
+    """Get the secure view mapping (must call initialize_secure_view_map first)."""
+    if _SECURE_VIEW_MAP is None:
+        logger.warning("Secure view map not initialized, returning empty map")
+        return {}
+    return _SECURE_VIEW_MAP
+
+
+def get_secure_views() -> Set[str]:
+    """Get the set of secure view names (must call initialize_secure_view_map first)."""
+    if _SECURE_VIEWS is None:
+        logger.warning("Secure views not initialized, returning empty set")
+        return set()
+    return _SECURE_VIEWS
 
 
 # ============================================================================
@@ -57,8 +146,11 @@ def is_secure_table(table: str) -> bool:
         >>> is_secure_table("inspections")
         False
     """
+    secure_map = get_secure_view_map()
+    table_normalized = _normalize_table_name(table)
+    
     # Check both exact match and lowercase match for flexibility
-    return table in SECURE_VIEW_MAP or table.lower() in {k.lower() for k in SECURE_VIEW_MAP.keys()}
+    return table in secure_map or table_normalized in {_normalize_table_name(k) for k in secure_map.keys()}
 
 
 def to_secure_view(table: str) -> str:
@@ -82,13 +174,16 @@ def to_secure_view(table: str) -> str:
         >>> to_secure_view("EMPLOYEE")
         "secure_employee"
     """
+    secure_map = get_secure_view_map()
+    
     # Try exact match first
-    if table in SECURE_VIEW_MAP:
-        return SECURE_VIEW_MAP[table]
+    if table in secure_map:
+        return secure_map[table]
     
     # Try case-insensitive match
-    for base_table, secure_view in SECURE_VIEW_MAP.items():
-        if table.lower() == base_table.lower():
+    table_normalized = _normalize_table_name(table)
+    for base_table, secure_view in secure_map.items():
+        if _normalize_table_name(base_table) == table_normalized:
             return secure_view
     
     # No match, return original
@@ -118,20 +213,22 @@ def from_secure_view(table: str) -> str:
         >>> from_secure_view("employee")
         "employee"
     """
+    secure_map = get_secure_view_map()
+    table_normalized = _normalize_table_name(table)
+    
     # Check if it's a secure view (exact match)
-    for base_table, secure_view in SECURE_VIEW_MAP.items():
-        if table == secure_view:
-            return base_table
-        # Case-insensitive match
-        if table.lower() == secure_view.lower():
+    for base_table, secure_view in secure_map.items():
+        if table == secure_view or table_normalized == _normalize_table_name(secure_view):
             return base_table
     
     # Check if it starts with secure_ prefix (fallback for edge cases)
-    if table.lower().startswith("secure_"):
+    if table_normalized.startswith("secure_"):
         suffix = table[7:]  # Remove "secure_" prefix
+        suffix_normalized = _normalize_table_name(suffix)
         # Try to find matching base table
-        for base_table, secure_view in SECURE_VIEW_MAP.items():
-            if suffix.lower() == base_table.lower() or suffix.lower() == secure_view[7:].lower():
+        for base_table, secure_view in secure_map.items():
+            base_normalized = _normalize_table_name(base_table)
+            if suffix_normalized == base_normalized:
                 return base_table
     
     # No match, return original
@@ -172,7 +269,8 @@ def rewrite_secure_tables(sql: str) -> str:
     rewritten_sql = sql
     replacements_made = []
     
-    for base_table, secure_view in SECURE_VIEW_MAP.items():
+    secure_view_map = get_secure_view_map()
+    for base_table, secure_view in secure_view_map.items():
         # Use word boundaries to avoid partial matches
         # Case-insensitive replacement preserves the original case in non-matching parts
         pattern = rf"\b{re.escape(base_table)}\b"
@@ -356,8 +454,9 @@ def get_secure_view_for_entity(entity: str) -> Optional[str]:
     # Normalize entity name (remove spaces, lowercase)
     normalized = entity.lower().replace(" ", "").replace("_", "")
     
-    if normalized in SECURE_VIEW_MAP:
-        return SECURE_VIEW_MAP[normalized]
+    secure_view_map = get_secure_view_map()
+    if normalized in secure_view_map:
+        return secure_view_map[normalized]
     
     return None
 
@@ -366,38 +465,15 @@ def get_secure_view_for_entity(entity: str) -> Optional[str]:
 # Validation on Import (Fail Fast)
 # ============================================================================
 
-def _validate_secure_view_map():
-    """
-    Validatevalues follow secure_* pattern.
-    """
-    for base, secure in SECURE_VIEW_MAP.items():
-        # Ensure values follow secure_* pattern
-        if not secure.startswith("secure_"):
-            raise ValueError(
-                f"SECURE_VIEW_MAP values must start with 'secure_': '{secure}'"
-            )
-        
-        # Warn if mapping doesn't follow expected lowercase pattern in secure view
-        expected_suffix = base.lower()
-        actual_suffix = secure.replace("secure_", "")
-        if actual_suffix != expected_suffix:
-            logger.debug(
-                f"SECURE_VIEW_MAP: '{base}' → '{secure}' (view suffix: {actual_suffix} vs expected: {expected_suffix})"
-            )
-
-
-# Run validation on import
-_validate_secure_view_map()
-
-
 # ============================================================================
 # Logging/Debug Utilities
 # ============================================================================
 
 def log_secure_view_config():
     """Log the current secure view configuration for debugging."""
-    logger.info(f"Secure view mappings ({len(SECURE_VIEW_MAP)} tables):")
-    for base, secure in sorted(SECURE_VIEW_MAP.items()):
+    secure_view_map = get_secure_view_map()
+    logger.info(f"Secure view mappings ({len(secure_view_map)} tables):")
+    for base, secure in sorted(secure_view_map.items()):
         logger.info(f"  {base:20} → {secure}")
 
 

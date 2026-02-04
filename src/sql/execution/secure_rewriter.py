@@ -17,7 +17,12 @@ import re
 from typing import Set, Optional
 from loguru import logger
 
-from src.config.constants import SECURE_VIEW_MAP, SECURE_VIEWS
+from src.utils.sql.secure_views import (
+    get_secure_view_map,
+    get_secure_views,
+    is_secure_table as is_secure_table_util,
+    to_secure_view as to_secure_view_util
+)
 
 
 # ============================================================================
@@ -42,8 +47,8 @@ def is_secure_table(table: str) -> bool:
         >>> is_secure_table("inspections")
         False
     """
-    # Check both exact match and lowercase match for flexibility
-    return table in SECURE_VIEW_MAP or table.lower() in {k.lower() for k in SECURE_VIEW_MAP.keys()}
+    # Delegate to utility function
+    return is_secure_table_util(table)
 
 
 def to_secure_view(table: str) -> str:
@@ -67,17 +72,8 @@ def to_secure_view(table: str) -> str:
         >>> to_secure_view("EMPLOYEE")
         "secure_employee"
     """
-    # Try exact match first
-    if table in SECURE_VIEW_MAP:
-        return SECURE_VIEW_MAP[table]
-    
-    # Try case-insensitive match
-    for base_table, secure_view in SECURE_VIEW_MAP.items():
-        if table.lower() == base_table.lower():
-            return secure_view
-    
-    # No match, return original
-    return table
+    # Delegate to utility function
+    return to_secure_view_util(table)
 
 
 def from_secure_view(table: str) -> str:
@@ -103,8 +99,10 @@ def from_secure_view(table: str) -> str:
         >>> from_secure_view("employee")
         "employee"
     """
+    secure_view_map = get_secure_view_map()
+    
     # Check if it's a secure view (exact match)
-    for base_table, secure_view in SECURE_VIEW_MAP.items():
+    for base_table, secure_view in secure_view_map.items():
         if table == secure_view:
             return base_table
         # Case-insensitive match
@@ -115,7 +113,7 @@ def from_secure_view(table: str) -> str:
     if table.lower().startswith("secure_"):
         suffix = table[7:]  # Remove "secure_" prefix
         # Try to find matching base table
-        for base_table, secure_view in SECURE_VIEW_MAP.items():
+        for base_table, secure_view in secure_view_map.items():
             if suffix.lower() == base_table.lower() or suffix.lower() == secure_view[7:].lower():
                 return base_table
     
@@ -157,7 +155,8 @@ def rewrite_secure_tables(sql: str) -> str:
     rewritten_sql = sql
     replacements_made = []
     
-    for base_table, secure_view in SECURE_VIEW_MAP.items():
+    secure_view_map = get_secure_view_map()
+    for base_table, secure_view in secure_view_map.items():
         # Use word boundaries to avoid partial matches
         # Case-insensitive replacement preserves the original case in non-matching parts
         pattern = rf"\b{re.escape(base_table)}\b"
@@ -341,8 +340,9 @@ def get_secure_view_for_entity(entity: str) -> Optional[str]:
     # Normalize entity name (remove spaces, lowercase)
     normalized = entity.lower().replace(" ", "").replace("_", "")
     
-    if normalized in SECURE_VIEW_MAP:
-        return SECURE_VIEW_MAP[normalized]
+    secure_view_map = get_secure_view_map()
+    if normalized in secure_view_map:
+        return secure_view_map[normalized]
     
     return None
 
@@ -351,36 +351,13 @@ def get_secure_view_for_entity(entity: str) -> Optional[str]:
 # Validation on Import (Fail Fast)
 # ============================================================================
 
-def _validate_secure_view_map():
-    """
-    Validate SECURE_VIEW_MAP values follow secure_* pattern.
-    """
-    for base, secure in SECURE_VIEW_MAP.items():
-        # Ensure values follow secure_* pattern
-        if not secure.startswith("secure_"):
-            raise ValueError(
-                f"SECURE_VIEW_MAP values must start with 'secure_': '{secure}'"
-            )
-        
-        # Warn if mapping doesn't follow expected lowercase pattern in secure view
-        expected_suffix = base.lower()
-        actual_suffix = secure.replace("secure_", "")
-        if actual_suffix != expected_suffix:
-            logger.debug(
-                f"SECURE_VIEW_MAP: '{base}' → '{secure}' (view suffix: {actual_suffix} vs expected: {expected_suffix})"
-            )
-
-
-# Run validation on import
-_validate_secure_view_map()
-
-
 # ============================================================================
 # Logging/Debug Utilities
 # ============================================================================
 
 def log_secure_view_config():
     """Log the current secure view configuration for debugging."""
-    logger.info(f"Secure view mappings ({len(SECURE_VIEW_MAP)} tables):")
-    for base, secure in sorted(SECURE_VIEW_MAP.items()):
+    secure_view_map = get_secure_view_map()
+    logger.info(f"Secure view mappings ({len(secure_view_map)} tables):")
+    for base, secure in sorted(secure_view_map.items()):
         logger.info(f"  {base:20} → {secure}")
