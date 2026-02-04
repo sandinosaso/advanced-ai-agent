@@ -142,7 +142,8 @@ def rewrite_secure_tables(sql: str) -> str:
     """
     Replace base tables with secure views ONLY for allow-listed tables.
     
-    Uses word boundary matching to avoid partial matches.
+    Uses word boundary matching to avoid partial matches, and skips
+    replacements inside string literals to preserve data values.
     This is the ONLY place where secure_* rewriting should happen.
     
     Args:
@@ -163,6 +164,10 @@ def rewrite_secure_tables(sql: str) -> str:
         >>> sql = "SELECT e.name FROM employee e JOIN workOrder wo ON e.id = wo.employeeId"
         >>> rewrite_secure_tables(sql)
         "SELECT e.name FROM secure_employee e JOIN secure_workorder wo ON e.id = wo.employeeId"
+        
+        >>> sql = "SELECT * FROM customer WHERE customerName = 'Main Default Customer'"
+        >>> rewrite_secure_tables(sql)
+        "SELECT * FROM secure_customer WHERE customerName = 'Main Default Customer'"
     """
     rewritten_sql = sql
     replacements_made = []
@@ -172,23 +177,86 @@ def rewrite_secure_tables(sql: str) -> str:
         # Case-insensitive replacement preserves the original case in non-matching parts
         pattern = rf"\b{re.escape(base_table)}\b"
         
-        # Check if replacement would happen
-        if re.search(pattern, rewritten_sql, flags=re.IGNORECASE):
-            replacements_made.append(f"{base_table} → {secure_view}")
+        # Find all matches with their positions
+        matches = list(re.finditer(pattern, rewritten_sql, flags=re.IGNORECASE))
         
-        # Replace with case-insensitive flag
-        rewritten_sql = re.sub(
-            pattern,
-            secure_view,
-            rewritten_sql,
-            flags=re.IGNORECASE
-        )
+        if not matches:
+            continue
+        
+        # Track if we'll make any replacements
+        will_replace = False
+        
+        # Build new SQL by processing matches in reverse order (to preserve positions)
+        for match in reversed(matches):
+            start, end = match.span()
+            
+            # Check if this match is inside a string literal
+            if _is_inside_string_literal(rewritten_sql, start):
+                # Skip replacement - this is a data value, not a table/column name
+                logger.debug(f"Skipping replacement of '{match.group()}' at position {start} (inside string literal)")
+                continue
+            
+            # Safe to replace - not inside a string literal
+            rewritten_sql = rewritten_sql[:start] + secure_view + rewritten_sql[end:]
+            will_replace = True
+        
+        if will_replace:
+            replacements_made.append(f"{base_table} → {secure_view}")
     
     # Log rewrites for observability
     if replacements_made:
         logger.debug(f"Rewrote secure tables: {', '.join(replacements_made)}")
     
     return rewritten_sql
+
+
+def _is_inside_string_literal(sql: str, position: int) -> bool:
+    """
+    Check if a position in SQL is inside a string literal.
+    
+    Handles both single quotes (') and double quotes (").
+    Takes into account escaped quotes.
+    
+    Args:
+        sql: SQL query string
+        position: Character position to check
+        
+    Returns:
+        True if position is inside a string literal, False otherwise
+        
+    Examples:
+        >>> sql = "SELECT * FROM customer WHERE name = 'Main Default Customer'"
+        >>> _is_inside_string_literal(sql, 14)  # 'customer' in FROM clause
+        False
+        >>> _is_inside_string_literal(sql, 52)  # 'Customer' in string value
+        True
+    """
+    # Count quotes before the position
+    single_quote_count = 0
+    double_quote_count = 0
+    i = 0
+    
+    while i < position:
+        char = sql[i]
+        
+        # Check for escaped quotes (preceded by backslash)
+        if i > 0 and sql[i-1] == '\\':
+            i += 1
+            continue
+        
+        if char == "'":
+            single_quote_count += 1
+        elif char == '"':
+            double_quote_count += 1
+        
+        i += 1
+    
+    # If odd number of quotes before position, we're inside a string
+    # Check both single and double quotes
+    inside_single_quotes = (single_quote_count % 2) == 1
+    inside_double_quotes = (double_quote_count % 2) == 1
+    
+    return inside_single_quotes or inside_double_quotes
 
 
 def extract_tables_from_sql(sql: str) -> Set[str]:
