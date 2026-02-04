@@ -15,6 +15,93 @@ from src.agents.sql.prompt_helpers import build_duplicate_join_example
 from src.agents.sql.planning import get_required_join_constraints
 
 
+def _extract_sql_from_markdown(text: str) -> str:
+    """
+    Extract SQL from a markdown code block anywhere in the text.
+    
+    Looks for ```sql or ``` code blocks and returns the content inside.
+    If no code block is found, returns the original text.
+    
+    Args:
+        text: Text that may contain markdown code blocks
+        
+    Returns:
+        SQL content from inside code block, or original text if no block found
+        
+    Examples:
+        >>> text = "Here is the query:\\n```sql\\nSELECT * FROM table\\n```"
+        >>> _extract_sql_from_markdown(text)
+        "SELECT * FROM table"
+    """
+    # Try to find a code block with optional 'sql' language tag
+    # Pattern: ``` or ```sql, then content, then closing ```
+    pattern = r'```(?:sql)?\s*\n(.*?)\n```'
+    match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+    
+    if match:
+        sql_content = match.group(1).strip()
+        logger.debug(f"Extracted SQL from markdown code block ({len(sql_content)} chars)")
+        return sql_content
+    
+    # No code block found - return original text
+    return text
+
+
+def _build_alias_to_base_table_map(sql: str) -> dict:
+    """
+    Build a mapping from table aliases to their base table names.
+    
+    Parses FROM/JOIN clauses to extract (table, alias) pairs.
+    Handles both explicit AS and implicit aliasing:
+    - FROM inspection AS i
+    - FROM inspection i
+    - JOIN secure_workorder w
+    - LEFT JOIN secure_employee se
+    
+    Args:
+        sql: SQL query string
+        
+    Returns:
+        Dict mapping alias -> base_table (after from_secure_view conversion)
+        
+    Examples:
+        >>> sql = "FROM inspection i JOIN secure_workorder w ON i.id = w.inspectionId"
+        >>> _build_alias_to_base_table_map(sql)
+        {'i': 'inspection', 'w': 'workOrder'}
+    """
+    alias_map = {}
+    
+    # Pattern to capture: FROM/JOIN table_name [AS] alias [ON ...]
+    # This captures the table name and an optional alias (with or without AS)
+    # We need to handle cases like:
+    #   FROM table_name alias
+    #   FROM table_name AS alias
+    #   JOIN table_name alias ON ...
+    #   LEFT JOIN table_name alias ON ...
+    
+    # Match: (LEFT/RIGHT/INNER/OUTER)? (FROM|JOIN) table_name [AS] potential_alias
+    # The potential_alias is valid if it's followed by ON/WHERE/JOIN/comma/EOF, not a comparison operator
+    pattern = r'\b(?:FROM|(?:LEFT\s+|RIGHT\s+|INNER\s+|OUTER\s+)?JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(?:AS\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\b'
+    
+    for match in re.finditer(pattern, sql, re.IGNORECASE):
+        table_name = match.group(1)
+        potential_alias = match.group(2)
+        
+        # Check if potential_alias is actually an alias (not ON, WHERE, JOIN, etc.)
+        # Aliases are typically short (1-3 chars) or meaningful abbreviations
+        # SQL keywords that might appear after table name: ON, WHERE, JOIN, INNER, LEFT, RIGHT, etc.
+        sql_keywords = {'ON', 'WHERE', 'JOIN', 'INNER', 'LEFT', 'RIGHT', 'OUTER', 'CROSS', 
+                       'AND', 'OR', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'UNION', 'EXCEPT'}
+        
+        if potential_alias and potential_alias.upper() not in sql_keywords:
+            # It's likely an alias
+            base_table = from_secure_view(table_name)
+            alias_map[potential_alias] = base_table
+            logger.debug(f"Found alias: {potential_alias} -> {table_name} (base: {base_table})")
+    
+    return alias_map
+
+
 def correct_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     """
     Focused correction agent that fixes SQL errors.
@@ -23,7 +110,9 @@ def correct_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     sql = state.get("sql", "")
     validation_errors = state.get("validation_errors")
     if validation_errors:
-        error_message = state.get("last_sql_error") or " | ".join(validation_errors)
+        # Format validation errors as a numbered list for clarity
+        error_list = "\n".join([f"{i+1}. {err}" for i, err in enumerate(validation_errors)])
+        error_message = error_list
     else:
         error_message = state.get("last_sql_error") or "Unknown error"
     correction_attempts = state.get("sql_correction_attempts", 0)
@@ -36,18 +125,54 @@ def correct_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
 
     state["sql_correction_attempts"] = correction_attempts + 1
 
+    # Build alias -> base_table mapping from FROM/JOIN clauses
+    alias_map = _build_alias_to_base_table_map(sql)
+    logger.debug(f"Alias map: {alias_map}")
+
+    # Extract table names from FROM/JOIN clauses (these are real table/view names)
     table_pattern = r"\b(?:FROM|JOIN|INTO|UPDATE)\s+([a-zA-Z_][a-zA-Z0-9_]*)"
     tables_in_sql = set()
     for table in re.findall(table_pattern, sql, re.IGNORECASE):
         base_table = from_secure_view(table)
         tables_in_sql.add(base_table)
 
+    # Extract table names from column qualifiers (table.column or alias.column)
+    # Use alias map to resolve aliases to their base table names
     column_pattern = r"\b([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)"
-    for table, _ in re.findall(column_pattern, sql):
-        base_table = from_secure_view(table)
-        tables_in_sql.add(base_table)
+    for qualifier, _ in re.findall(column_pattern, sql):
+        # Check if qualifier is an alias first
+        if qualifier in alias_map:
+            # It's an alias - add the base table it refers to
+            base_table = alias_map[qualifier]
+            tables_in_sql.add(base_table)
+        else:
+            # It's a direct table/view reference - convert to base table
+            base_table = from_secure_view(qualifier)
+            tables_in_sql.add(base_table)
 
+    # Filter to only tables that exist in join_graph to avoid spurious warnings
+    valid_tables_in_sql = {t for t in tables_in_sql if t in ctx.join_graph["tables"]}
+    
+    # Log both sets for debugging
     logger.info(f"Tables found in SQL query (after conversion to base tables): {sorted(tables_in_sql)}")
+    if len(valid_tables_in_sql) < len(tables_in_sql):
+        skipped = tables_in_sql - valid_tables_in_sql
+        logger.debug(f"Skipped tables not in join_graph: {sorted(skipped)}")
+    
+    # Use only valid tables for schema and relationships
+    tables_in_sql = valid_tables_in_sql
+
+    # Build a map of table -> errors for that table (for better error presentation)
+    error_by_table = {}
+    if validation_errors:
+        for err in validation_errors:
+            # Extract table name from error like "Column 'X' does NOT exist in table 'workOrder'"
+            match = re.search(r"in table '([^']+)'", err)
+            if match:
+                table_name = match.group(1)
+                if table_name not in error_by_table:
+                    error_by_table[table_name] = []
+                error_by_table[table_name].append(err)
 
     table_schemas = []
     for table_name in sorted(tables_in_sql):
@@ -56,9 +181,16 @@ def correct_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
             columns_str = ", ".join(columns[:settings.sql_max_columns_in_correction])
             if len(columns) > settings.sql_max_columns_in_correction:
                 columns_str += f" ... ({len(columns)} total columns)"
-            table_schemas.append(f"{table_name}: {columns_str}")
-        else:
-            logger.warning(f"Table {table_name} not found in join_graph, skipping schema")
+            
+            schema_line = f"{table_name}: {columns_str}"
+            
+            # If there are errors for this table, add them right after the schema
+            if table_name in error_by_table:
+                schema_line += "\n  ERRORS FOR THIS TABLE:"
+                for err in error_by_table[table_name]:
+                    schema_line += f"\n    - {err}"
+            
+            table_schemas.append(schema_line)
 
     relevant_relationships = []
     for rel in state.get("allowed_relationships", []):
@@ -185,18 +317,22 @@ RELEVANT RELATIONSHIPS (only between tables in query):
 {join_type_warning}
 
 INSTRUCTIONS:
-1. Analyze the error message carefully
+1. Analyze the error message carefully - each numbered error shows the wrong column and available columns
 2. Check the table schemas to find where the column actually exists
-3. Fix the SQL query by:
+3. **CRITICAL: Column names are CASE-SENSITIVE and must match the schema EXACTLY**
+   - Use camelCase as shown in the schema (e.g., workOrderNumber, NOT work_order_number)
+   - Use exact column names from "Available columns:" in the error messages
+   - The database uses camelCase naming (customerId, workOrderNumber, createdAt, etc.)
+4. Fix the SQL query by:
    - Using the correct table name for each column
-   - Ensuring all columns exist in their respective tables
+   - Ensuring all columns exist in their respective tables with EXACT case matching
    - Fixing any join conditions that reference wrong columns
    - If same table appears in multiple JOINs, keep only the most direct path
    - CRITICAL: Preserve ALL compound join conditions (AND clauses) - only fix column/table names
    - CRITICAL: Preserve join types (LEFT JOIN vs JOIN) - do NOT change them
 {duplicate_table_instructions}{group_by_instructions}
-4. Return ONLY the corrected SQL query, nothing else
-5. Do NOT add comments or explanations
+5. Return ONLY the corrected SQL query, nothing else
+6. Do NOT add comments or explanations
 
 CORRECTED SQL QUERY:"""
 
@@ -206,10 +342,15 @@ CORRECTED SQL QUERY:"""
         response = ctx.llm.invoke(prompt)
         corrected_sql = str(response.content).strip() if hasattr(response, "content") and response.content else ""
 
+        # First, try to extract SQL from a markdown code block anywhere in the response
+        corrected_sql = _extract_sql_from_markdown(corrected_sql)
+
+        # Legacy cleanup: handle case where response starts with ``` but wasn't caught by markdown extraction
         if corrected_sql.startswith("```"):
             lines = corrected_sql.split("\n")
             corrected_sql = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
 
+        # Strip leading "SQL" keyword if present
         if corrected_sql.upper().startswith("SQL"):
             corrected_sql = corrected_sql[3:].strip()
 
