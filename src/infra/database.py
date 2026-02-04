@@ -72,8 +72,8 @@ class Database:
         SET @workOrderIds = NULL;
         SET @serviceLocationIds = NULL;
         """
-        def set_session_variables(dbapi_conn, connection_record):
-            """Set MySQL session variables when connection is established or checked out"""
+        def _execute_session_setup(dbapi_conn):
+            """Common logic to set session variables"""
             cursor = dbapi_conn.cursor()
             try:
                 # CRITICAL: Force the correct database schema on every connection
@@ -104,9 +104,17 @@ class Database:
             finally:
                 cursor.close()
         
-        # Register for both 'connect' (new connections) and 'checkout' (reused connections)
-        event.listen(self.engine, "connect", set_session_variables)
-        event.listen(self.engine, "checkout", set_session_variables)
+        # Handler for 'connect' event (new connections) - receives 2 args
+        @event.listens_for(self.engine, "connect")
+        def on_connect(dbapi_conn, connection_record):
+            """Set session variables when a new connection is created"""
+            _execute_session_setup(dbapi_conn)
+        
+        # Handler for 'checkout' event (reused connections) - receives 3 args
+        @event.listens_for(self.engine, "checkout")
+        def on_checkout(dbapi_conn, connection_record, connection_proxy):
+            """Set session variables when a connection is checked out from the pool"""
+            _execute_session_setup(dbapi_conn)
         
         logger.info("Registered MySQL session variable listener for secure views")
     
