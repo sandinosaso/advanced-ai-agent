@@ -117,6 +117,26 @@ def test_rewrite_secure_tables():
     assert "secure_inspections" not in rewritten4
     print("✅ Test 4 passed\n")
     
+    # Test 5: String literals should NOT be rewritten
+    sql5 = "SELECT * FROM customer WHERE customerName = 'Main Default Customer'"
+    rewritten5 = rewrite_secure_tables(sql5)
+    print(f"Original:  {sql5}")
+    print(f"Rewritten: {rewritten5}")
+    assert "secure_customer" in rewritten5  # Table name should be rewritten
+    assert "'Main Default Customer'" in rewritten5  # String value should NOT be changed
+    assert "'Main Default secure_customer'" not in rewritten5  # Verify no replacement in string
+    print("✅ Test 5 passed (string literals preserved)\n")
+    
+    # Test 6: Multiple string literals with different quotes
+    sql6 = """SELECT * FROM employee WHERE name = 'John Employee' AND dept = "employee Relations" """
+    rewritten6 = rewrite_secure_tables(sql6)
+    print(f"Original:  {sql6}")
+    print(f"Rewritten: {rewritten6}")
+    assert "secure_employee" in rewritten6  # Table name should be rewritten
+    assert "'John Employee'" in rewritten6  # Single-quoted string preserved
+    assert '"employee Relations"' in rewritten6  # Double-quoted string preserved
+    print("✅ Test 6 passed (multiple string literals preserved)\n")
+    
     print("✅ rewrite_secure_tables works correctly\n")
 
 

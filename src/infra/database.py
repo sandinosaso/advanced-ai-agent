@@ -77,6 +77,13 @@ class Database:
             """Set MySQL session variables when connection is established"""
             cursor = dbapi_conn.cursor()
             try:
+                # CRITICAL: Force the correct database schema on every connection
+                # This prevents issues with connection pool reuse where a previous
+                # query may have executed USE app or similar
+                db_name = os.getenv("DB_NAME", "crewos")
+                cursor.execute(f"USE `{db_name}`")
+                logger.info(f"✅ Set active database to '{db_name}'")
+                
                 # Get encryption key from environment
                 encrypt_key = os.getenv("DB_ENCRYPT_KEY", "")
                 

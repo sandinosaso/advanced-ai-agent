@@ -90,6 +90,32 @@ class SQLQueryTool:
         """
         return self._available_tables
     
+    def _verify_database_context(self, conn) -> bool:
+        """
+        Verify the connection is using the correct database schema.
+        
+        Returns True if correct, logs error and returns False if wrong.
+        """
+        import os
+        try:
+            result = conn.execute(text("SELECT DATABASE()"))
+            current_db = result.scalar()
+            expected_db = os.getenv("DB_NAME", "crewos")
+            
+            if current_db != expected_db:
+                logger.error(
+                    f"❌ SCHEMA MISMATCH: Active DB is '{current_db}', expected '{expected_db}'. "
+                    f"This will cause 'Table not found' errors. "
+                    f"Check connection pooling and USE statements in other code."
+                )
+                return False
+            
+            logger.debug(f"✅ Database context verified: {current_db}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to verify database context: {e}")
+            return False
+    
     def _validate_query(self, query: str) -> str:
         """
         Validate and rewrite query for security.
@@ -192,6 +218,15 @@ class SQLQueryTool:
         # Execute using SQLAlchemy directly to get column names
         try:
             with self.engine.connect() as conn:
+                # Verify we're using the correct database schema
+                import os
+                if not self._verify_database_context(conn):
+                    raise RuntimeError(
+                        f"Database schema context is incorrect. "
+                        f"Expected '{os.getenv('DB_NAME', 'crewos')}' but got different schema. "
+                        f"Cannot execute query safely."
+                    )
+                
                 result = conn.execute(text(rewritten_query))
                 
                 # Get column names from result
