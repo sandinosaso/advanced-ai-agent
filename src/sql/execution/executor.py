@@ -13,7 +13,11 @@ from src.infra.database import get_database
 from src.config.settings import settings
 from src.llm.client import create_llm
 from src.utils.logging import logger
-from src.config.constants import SECURE_VIEW_MAP
+from src.utils.sql.secure_views import (
+    initialize_secure_view_map,
+    get_secure_view_map,
+    get_secure_views
+)
 from src.sql.execution.secure_rewriter import rewrite_secure_tables, validate_tables_exist
 
 
@@ -29,12 +33,19 @@ class SQLQueryTool:
         db_instance = get_database()
         self.engine = db_instance.engine
         
+        # Initialize secure view mapping from database
+        with self.engine.connect() as conn:
+            initialize_secure_view_map(conn)
+        
+        # Get the dynamically discovered mapping
+        secure_view_map = get_secure_view_map()
+        
         # Exclude encrypted base tables - we'll use secure views via rewriting
         # Only the base tables that have secure views should be excluded
-        excluded_tables = list(SECURE_VIEW_MAP.keys())
+        excluded_tables = list(secure_view_map.keys())
         
         logger.info(f"Excluding encrypted base tables: {', '.join(excluded_tables)}")
-        logger.info(f"These will be accessed via: {', '.join(SECURE_VIEW_MAP.values())}")
+        logger.info(f"These will be accessed via: {', '.join(secure_view_map.values())}")
         
         # Create LangChain SQL Database wrapper
         self.db = SQLDatabase(
