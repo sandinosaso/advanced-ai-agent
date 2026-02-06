@@ -17,6 +17,7 @@ class DomainResolution:
     filters: List[Dict[str, Any]]
     confidence: float
     resolution_strategy: str  # "primary", "secondary", "fallback"
+    hints: Optional[Dict[str, Any]] = None  # Optional hints for payroll logic, dynamic attributes, etc.
 
 
 @dataclass

@@ -145,10 +145,15 @@ Return ONLY a JSON array of strings, e.g. ["crane", "inspection"]."""
             primary = term_def.get("resolution", {}).get("primary", {})
             requires_explicit = term_def.get("requires_explicit_terms") or primary.get("requires_explicit_terms")
             requires_atomic = term_def.get("requires_atomic_signals") or primary.get("requires_atomic_signals")
+            
+            # Check for aliases
+            aliases = term_def.get("aliases", [])
 
             if not requires_explicit and not requires_atomic:
-                # Atomic-only term: include if it appears in atomic signals
+                # Atomic-only term: include if it appears in atomic signals or matches an alias
                 if any(s.lower() == term.lower() for s in atomic_signals):
+                    result.append(term)
+                elif aliases and any(s.lower() in [a.lower() for a in aliases] for s in atomic_signals):
                     result.append(term)
                 continue
 

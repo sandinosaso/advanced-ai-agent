@@ -27,19 +27,71 @@ from src.agents.sql.prompt_helpers import (
 )
 
 
-def _build_domain_filter_instructions(state: SQLGraphState) -> str:
+def get_default_table_filter_clauses(selected_tables: List[str], registry: Dict[str, Any]) -> List[str]:
+    """
+    Build WHERE clause fragments from default table filters.
+    
+    Args:
+        selected_tables: List of selected table names
+        registry: Domain registry dictionary
+        
+    Returns:
+        List of WHERE clause strings for tables with default filters
+        
+    Example:
+        For workOrder with isInternal=0: ["workOrder.isInternal = 0"]
+    """
+    if not registry:
+        return []
+    
+    default_filters = registry.get("default_table_filters", {})
+    if not default_filters:
+        return []
+    
+    clauses = []
+    for table in selected_tables:
+        if table in default_filters:
+            filters = default_filters[table]
+            for filter_def in filters:
+                column = filter_def.get("column")
+                value = filter_def.get("value")
+                if column and value is not None:
+                    # Format value based on type
+                    if isinstance(value, bool):
+                        value_str = "true" if value else "false"
+                    elif isinstance(value, str):
+                        value_str = f"'{value}'"
+                    else:
+                        value_str = str(value)
+                    
+                    clause = f"{table}.{column} = {value_str}"
+                    clauses.append(clause)
+    
+    return clauses
+
+
+def _build_domain_filter_instructions(state: SQLGraphState, ctx: SQLContext) -> str:
     """Build instructions for domain filters in SQL generation prompt"""
     domain_resolutions = state.get("domain_resolutions", [])
-    if not domain_resolutions:
-        return ""
-
-    where_clauses = build_where_clauses(domain_resolutions)
-    if not where_clauses:
+    selected_tables = state.get("tables", [])
+    
+    # Get domain-based WHERE clauses
+    domain_clauses = build_where_clauses(domain_resolutions) if domain_resolutions else []
+    
+    # Get default table filter clauses
+    default_clauses = []
+    if ctx.domain_ontology and ctx.domain_ontology.registry:
+        default_clauses = get_default_table_filter_clauses(selected_tables, ctx.domain_ontology.registry)
+    
+    # Merge all clauses
+    all_clauses = domain_clauses + default_clauses
+    
+    if not all_clauses:
         return ""
 
     instructions = "\n\nDOMAIN FILTER REQUIREMENTS:\n"
     instructions += "You MUST include these WHERE clause conditions to filter by domain concepts:\n"
-    for clause in where_clauses:
+    for clause in all_clauses:
         instructions += f"  - {clause}\n"
     instructions += "\nCombine these with AND in your WHERE clause.\n"
 
@@ -81,9 +133,14 @@ def _deduplicate_joins(sql: str) -> str:
     return "\n".join(deduplicated_lines)
 
 
-def _inject_domain_filters(sql: str, domain_resolutions: List[Dict[str, Any]]) -> str:
+def _inject_domain_filters(sql: str, domain_resolutions: List[Dict[str, Any]], default_clauses: List[str] = None) -> str:
     """Inject domain filter WHERE clauses into generated SQL."""
     where_clauses = build_where_clauses(domain_resolutions)
+    
+    # Merge with default table filter clauses
+    if default_clauses:
+        where_clauses.extend(default_clauses)
+    
     if not where_clauses:
         return sql
 
@@ -287,7 +344,7 @@ Join plan (follow this EXACTLY, step by step):
 {"EXPLICIT JOIN STEPS (follow these in order):" + chr(10) + chr(10).join(f"{i+1}. {step}" for i, step in enumerate(join_path_steps)) if join_path_steps else ""}
 
 IMPORTANT: {bridge_example} Only include bridge tables if they are explicitly listed in the JOIN_PATH above. Do NOT add unnecessary bridge tables when direct foreign keys exist.
-{_build_domain_filter_instructions(state)}
+{_build_domain_filter_instructions(state, ctx)}
 Return ONLY the SQL query, nothing else.
 """
 
@@ -300,9 +357,17 @@ Return ONLY the SQL query, nothing else.
     logger.info(f"Generated SQL (before rewriting): {raw_sql}")
 
     domain_resolutions = state.get("domain_resolutions", [])
-    if domain_resolutions:
-        raw_sql = _inject_domain_filters(raw_sql, domain_resolutions)
-        logger.info("Injected domain filters into SQL")
+    
+    # Get default table filter clauses
+    default_clauses = []
+    if ctx.domain_ontology and ctx.domain_ontology.registry:
+        selected_tables = state.get("tables", [])
+        default_clauses = get_default_table_filter_clauses(selected_tables, ctx.domain_ontology.registry)
+    
+    # Inject both domain and default table filters
+    if domain_resolutions or default_clauses:
+        raw_sql = _inject_domain_filters(raw_sql, domain_resolutions, default_clauses)
+        logger.info(f"Injected filters into SQL (domain: {len(domain_resolutions)}, default: {len(default_clauses)})")
 
     raw_sql = _deduplicate_joins(raw_sql)
     

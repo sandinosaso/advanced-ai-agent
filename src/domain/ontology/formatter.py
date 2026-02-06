@@ -29,6 +29,19 @@ def format_domain_context_for_table_selection(resolutions: List[Dict[str, Any]])
     for res in resolutions:
         lines.append(f"\nConcept: '{res['term']}' ({res['entity']})")
         lines.append(f"  Tables needed: {', '.join(res['tables'])}")
+        
+        # Include hints if present
+        if res.get('hints'):
+            hints = res['hints']
+            if 'logic_hint' in hints:
+                lines.append(f"  Calculation hint: {hints['logic_hint']}")
+            if 'dynamic_attribute_keys' in hints:
+                lines.append(f"  Dynamic attribute keys:")
+                for entity, keys in hints['dynamic_attribute_keys'].items():
+                    lines.append(f"    - {entity}: {', '.join(keys)}")
+            if 'extraction_pattern' in hints:
+                lines.append(f"  Extraction pattern: {hints['extraction_pattern']}")
+        
         lines.append(f"  Confidence: {res['confidence']} (strategy: {res['strategy']})")
     
     lines.append("=" * 70)
@@ -74,6 +87,18 @@ def format_domain_context(resolutions: List[Dict[str, Any]]) -> str:
                     lines.append(f"    - {column_ref} {f['operator']} '{f['value']}'")
         else:
             lines.append(f"  Note: Structural grouping (no filters needed)")
+        
+        # Include hints if present
+        if res.get('hints'):
+            hints = res['hints']
+            if 'logic_hint' in hints:
+                lines.append(f"  Calculation hint: {hints['logic_hint']}")
+            if 'dynamic_attribute_keys' in hints:
+                lines.append(f"  Dynamic attribute keys:")
+                for entity, keys in hints['dynamic_attribute_keys'].items():
+                    lines.append(f"    - {entity}: {', '.join(keys)}")
+            if 'extraction_pattern' in hints:
+                lines.append(f"  Extraction pattern: {hints['extraction_pattern']}")
         
         lines.append(f"  Confidence: {res['confidence']} (strategy: {res['strategy']})")
     

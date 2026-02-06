@@ -285,6 +285,79 @@
           ]
         }
       }
+    },
+    "payroll_rules": {
+      "entity": "payroll_calculation",
+      "description": "Business rules for calculating regular, overtime, and double time pay",
+      "aliases": ["payroll"],
+      "resolution": {
+        "primary": {
+          "tables": ["workTime", "travelTime", "crewWorkDay", "crew", "workOrder", "employee"],
+          "match_type": "structural",
+          "confidence": 1.0,
+          "logic_hint": "CASE WHEN DAYOFWEEK(date)=1 THEN double_time ELSE IF hours<=8 THEN regular ELSE overtime END"
+        }
+      }
+    },
+    "crew_lead": {
+      "entity": "crew_leadership",
+      "description": "Identify crew leads on work orders",
+      "aliases": ["lead", "crew lead"],
+      "resolution": {
+        "primary": {
+          "tables": ["employeeCrew", "crew", "workOrder", "employee"],
+          "table": "employeeCrew",
+          "column": "isLead",
+          "match_type": "boolean",
+          "value": 1,
+          "confidence": 1.0
+        }
+      }
+    },
+    "common_dynamic_attributes": {
+      "entity": "dynamic_attributes",
+      "description": "Common dynamic attribute keys across entities",
+      "aliases": ["dynamic attribute", "custom attribute"],
+      "resolution": {
+        "primary": {
+          "tables": [],
+          "match_type": "structural",
+          "confidence": 0.9,
+          "workOrder": ["customAttribute", "Validity", "EC100", "CURRENCY ATTRIBUTE TEST 1"],
+          "asset": ["Cores", "Certification", "Wattage", "Memory", "Clock Speed", "HP"],
+          "extraction_pattern": "JSON_UNQUOTE(JSON_EXTRACT(dynamicAttributes, '$.key'))"
+        }
+      }
     }
+  },
+  "default_table_filters": {
+    "workOrder": [
+      {
+        "column": "isInternal",
+        "value": 0
+      }
+    ],
+    "employee": [
+      {
+        "column": "isInternal",
+        "value": 0
+      }
+    ],
+    "customer": [
+      {
+        "column": "isInternal",
+        "value": 0
+      },
+      {
+        "column": "isActive",
+        "value": 1
+      }
+    ],
+    "inspection": [
+      {
+        "column": "isInternal",
+        "value": 0
+      }
+    ]
   }
 }
