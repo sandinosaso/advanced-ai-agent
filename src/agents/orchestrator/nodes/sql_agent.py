@@ -63,7 +63,9 @@ def execute_sql_node(state: AgentState, ctx: OrchestratorContext) -> AgentState:
             logger.info(f"Stored query result in memory: {len(memory)} results total")
 
     except Exception as e:
+        import traceback
         logger.error(f"SQL agent error: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         state["sql_result"] = f"Error: {str(e)}"
         state["sql_structured_result"] = None
         state["next_step"] = "finalize"

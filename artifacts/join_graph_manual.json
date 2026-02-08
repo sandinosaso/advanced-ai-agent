@@ -372,6 +372,18 @@
             "description": "Allowed work time types per employee role - defines permissions/configuration, not actual time entries",
             "exclude_as_bridge_for": ["workTime", "workTimeType"],
             "note": "Only needed when querying role permissions or allowed types, not for actual time tracking"
+        },
+        "expense": {
+            "role": "instance",
+            "category": "financial",
+            "description": "Job-related expenses - instance data, not a bridge",
+            "exclude_as_bridge_for": ["workOrder", "employee", "crew"]
+        },
+        "user": {
+            "role": "satellite",
+            "category": "audit",
+            "description": "User accounts - audit/reference data, not a bridge",
+            "exclude_as_bridge_for": ["customer", "employee", "workOrder"]
         }
     }
 }

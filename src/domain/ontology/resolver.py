@@ -175,23 +175,16 @@ class DomainTermResolver:
         elif "logic_hint" in strategy_config:
             hints["logic_hint"] = strategy_config["logic_hint"]
         
-        # Handle dynamic_attribute_keys (for common dynamic attributes)
-        # Look for entity-keyed keys (e.g., "workOrder": [...], "asset": [...])
-        dynamic_keys = {}
+        # Handle extraction_pattern if present
         extraction_pattern = strategy_config.get("extraction_pattern")
-        
-        # Check for entity-keyed attributes in strategy_config
-        for key, value in strategy_config.items():
-            if key not in ["table", "tables", "match_type", "confidence", "logic", "logic_hint", "extraction_pattern", "column", "columns", "value"]:
-                if isinstance(value, list):
-                    # This might be an entity with its dynamic attribute keys
-                    dynamic_keys[key] = value
-        
-        if dynamic_keys:
-            hints["dynamic_attribute_keys"] = dynamic_keys
         if extraction_pattern:
             hints["extraction_pattern"] = extraction_pattern
-        
+
+        # Merge strategy-level anchor_table into extra (for FROM clause selection)
+        resolution_extra = dict(extra) if extra else {}
+        if "anchor_table" in strategy_config:
+            resolution_extra["anchor_table"] = strategy_config["anchor_table"]
+
         resolution = DomainResolution(
             term=term,
             entity=entity,
@@ -200,7 +193,7 @@ class DomainTermResolver:
             confidence=confidence,
             resolution_strategy=strategy_name,
             hints=hints if hints else None,
-            extra=extra
+            extra=resolution_extra if resolution_extra else None
         )
         
         logger.debug(f"Resolved '{term}' using {strategy_name} strategy: {len(tables)} tables, {len(filters)} filters, hints: {bool(hints)}")

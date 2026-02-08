@@ -315,22 +315,8 @@
           "column": "isLead",
           "match_type": "boolean",
           "value": 1,
-          "confidence": 1.0
-        }
-      }
-    },
-    "common_dynamic_attributes": {
-      "entity": "dynamic_attributes",
-      "description": "Common dynamic attribute keys across entities",
-      "aliases": ["dynamic attribute", "custom attribute"],
-      "resolution": {
-        "primary": {
-          "tables": [],
-          "match_type": "structural",
-          "confidence": 0.9,
-          "workOrder": ["customAttribute", "Validity", "EC100", "CURRENCY ATTRIBUTE TEST 1"],
-          "asset": ["Cores", "Certification", "Wattage", "Memory", "Clock Speed", "HP"],
-          "extraction_pattern": "JSON_UNQUOTE(JSON_EXTRACT(dynamicAttributes, '$.key'))"
+          "confidence": 1.0,
+          "anchor_table": "workOrder"
         }
       }
     }

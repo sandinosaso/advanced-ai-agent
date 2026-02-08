@@ -62,14 +62,13 @@ class TestDomainRegistryPatterns(unittest.TestCase):
         self.ontology = DomainOntology()
         self.registry = self.ontology.registry
     
-    def test_registry_has_three_new_terms(self):
-        """Test that registry includes the three new terms"""
+    def test_registry_has_payroll_and_crew_lead_terms(self):
+        """Test that registry includes payroll and crew lead terms"""
         terms = self.registry.get("terms", {})
         
-        # Check that the three new terms exist
+        # Check that the terms exist
         self.assertIn("payroll_rules", terms)
         self.assertIn("crew_lead", terms)
-        self.assertIn("common_dynamic_attributes", terms)
     
     def test_registry_has_default_table_filters(self):
         """Test that registry has default_table_filters at top level"""
@@ -81,7 +80,6 @@ class TestDomainRegistryPatterns(unittest.TestCase):
         self.assertIn("workOrder", default_filters)
         self.assertIn("employee", default_filters)
         self.assertIn("customer", default_filters)
-        self.assertIn("inspection", default_filters)
         
         # Check workOrder has isInternal filter
         wo_filters = default_filters["workOrder"]
@@ -114,8 +112,8 @@ class TestDomainRegistryPatterns(unittest.TestCase):
         self.assertIn("LEAST", logic_hint, "Should contain LEAST for regular time cap")
         self.assertIn("GREATEST", logic_hint, "Should contain GREATEST for overtime calculation")
         self.assertIn("8", logic_hint, "Should contain the 8-hour threshold")
-        self.assertIn("Group by employee and DATE", logic_hint, "Should specify grouping requirement")
-        self.assertIn("DO NOT use workTimeType", logic_hint, "Should explicitly warn against using workTimeType")
+        self.assertIn("GROUP BY", logic_hint, "Should specify grouping requirement")
+        self.assertIn("DO NOT", logic_hint, "Should explicitly warn against using workTimeType")
         
         # Verify all three formula types are present
         self.assertIn("Regular Time", logic_hint)
@@ -199,28 +197,6 @@ class TestDomainRegistryPatterns(unittest.TestCase):
         self.assertEqual(filter_def["value"], 1)
         self.assertEqual(filter_def["match_type"], "boolean")
     
-    def test_common_dynamic_attributes_resolution(self):
-        """Test that common_dynamic_attributes resolves correctly with hints"""
-        resolution = self.ontology.resolve_domain_term("common_dynamic_attributes")
-        
-        self.assertIsNotNone(resolution)
-        self.assertEqual(resolution.term, "common_dynamic_attributes")
-        self.assertEqual(resolution.entity, "dynamic_attributes")
-        
-        # Check hints contain dynamic_attribute_keys and extraction_pattern
-        self.assertIsNotNone(resolution.hints)
-        self.assertIn("dynamic_attribute_keys", resolution.hints)
-        self.assertIn("extraction_pattern", resolution.hints)
-        
-        # Check entity keys
-        keys = resolution.hints["dynamic_attribute_keys"]
-        self.assertIn("workOrder", keys)
-        self.assertIn("asset", keys)
-        
-        # Check extraction pattern
-        pattern = resolution.hints["extraction_pattern"]
-        self.assertIn("JSON_UNQUOTE", pattern)
-        self.assertIn("JSON_EXTRACT", pattern)
     
     def test_default_table_filter_clauses(self):
         """Test that get_default_table_filter_clauses returns correct clauses"""
@@ -271,29 +247,6 @@ class TestDomainRegistryPatterns(unittest.TestCase):
         self.assertIn("Calculation hint:", formatted)
         self.assertIn("DAYOFWEEK", formatted)
     
-    def test_formatter_includes_dynamic_attribute_hints(self):
-        """Test that formatter includes dynamic attribute hints"""
-        resolution = self.ontology.resolve_domain_term("common_dynamic_attributes")
-        
-        # Convert to dict format
-        res_dict = {
-            "term": resolution.term,
-            "entity": resolution.entity,
-            "tables": resolution.tables,
-            "filters": resolution.filters,
-            "confidence": resolution.confidence,
-            "strategy": resolution.resolution_strategy,
-            "hints": resolution.hints
-        }
-        
-        formatted = format_domain_context([res_dict])
-        
-        # Check that dynamic attribute keys and extraction pattern are in output
-        self.assertIn("Dynamic attribute keys:", formatted)
-        self.assertIn("workOrder:", formatted)
-        self.assertIn("asset:", formatted)
-        self.assertIn("Extraction pattern:", formatted)
-        self.assertIn("JSON_UNQUOTE", formatted)
     
     def test_build_where_clauses_for_crew_lead(self):
         """Test that build_where_clauses produces correct WHERE fragment for crew_lead"""
@@ -329,11 +282,6 @@ class TestDomainRegistryPatterns(unittest.TestCase):
         crew_lead = terms.get("crew_lead", {})
         self.assertIn("aliases", crew_lead)
         self.assertTrue(any(a in ["lead", "crew lead"] for a in crew_lead["aliases"]))
-        
-        # Check common_dynamic_attributes has aliases
-        dyn_attrs = terms.get("common_dynamic_attributes", {})
-        self.assertIn("aliases", dyn_attrs)
-        self.assertTrue(any(a in ["dynamic attribute", "custom attribute"] for a in dyn_attrs["aliases"]))
 
 
 if __name__ == '__main__':

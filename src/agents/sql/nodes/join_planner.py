@@ -157,6 +157,14 @@ def plan_joins_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     suggested_paths.sort(key=lambda x: (x["hops"], -x["confidence_sort"]))
     suggested_paths = suggested_paths[:settings.sql_max_suggested_paths]
 
+    # When anchor_table is set, prefer paths that start FROM the anchor so the LLM generates correct FROM clause
+    anchor_table = state.get("anchor_table")
+    if anchor_table and suggested_paths:
+        with_anchor_first = [p for p in suggested_paths if p.get("from") == anchor_table]
+        other_paths = [p for p in suggested_paths if p.get("from") != anchor_table]
+        if with_anchor_first:
+            suggested_paths = with_anchor_first + other_paths
+
     for path in suggested_paths:
         path.pop("confidence_sort", None)
 
@@ -207,6 +215,10 @@ def plan_joins_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
                 break
 
     bridge_example = build_bridge_table_example(ctx.join_graph)
+
+    anchor_instruction = ""
+    if state.get("anchor_table"):
+        anchor_instruction = f"\nCRITICAL - ANCHOR TABLE: The first table in JOIN_PATH must be '{state['anchor_table']}'. Start with a step like: - JOIN: {state['anchor_table']}.<column> = <other>.<column> so the generated SQL uses FROM {state['anchor_table']} and returns all rows.\n"
     
     # Get scoped join hints
     scoped_join_hints = build_scoped_join_hints(
@@ -234,12 +246,14 @@ These paths are computed by the graph algorithm and include ALL bridge tables ne
 
 Direct and transitive relationships available (for reference only - prefer suggested paths):
 {json.dumps(rels_display[:settings.sql_max_relationships_in_prompt], indent=2)}
+{anchor_instruction}
 {domain_filter_hints}
 {display_hints}
 {join_type_hints}
 {scoped_join_hints}
 Task:
 - PRIMARY: Use the suggested paths above - they are computed by the graph algorithm and are correct
+- CRITICAL (when anchor table is set): The FIRST table in your JOIN_PATH must be the primary entity. Start with a step where that table is on the left (e.g. - JOIN: workOrder.id = crew.workOrderId). This ensures the SQL uses FROM workOrder and returns all rows for that entity; starting from another table (e.g. user or expense) will return too few rows.
 - PREFER DIRECT RELATIONSHIPS: When two tables have a direct foreign key, use it directly (e.g., workTime.employeeId -> employee.id)
 - AVOID UNNECESSARY BRIDGES: Do NOT add bridge tables if a direct path already exists between the tables
   * Example: If workTime has employeeId FK to employee, DO NOT use employeeCrew as a bridge

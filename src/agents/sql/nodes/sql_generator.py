@@ -2,7 +2,8 @@
 SQL generator node
 """
 
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -11,7 +12,7 @@ from src.agents.sql.context import SQLContext
 from src.agents.sql.utils import trace_step
 from src.config.settings import settings
 from src.domain.ontology.formatter import build_where_clauses, format_domain_context
-from src.sql.execution.secure_rewriter import rewrite_secure_tables
+from src.sql.execution.secure_rewriter import rewrite_secure_tables, from_secure_view, to_secure_view
 from src.agents.sql.planning import (
     extract_tables_from_join_plan,
     parse_join_path_steps,
@@ -68,6 +69,112 @@ def get_default_table_filter_clauses(selected_tables: List[str], registry: Dict[
                     clauses.append(clause)
     
     return clauses
+
+
+def _rewrite_sql_from_anchor(sql: str, anchor_table: str) -> str:
+    """
+    If the query does not start from the anchor table, reorder FROM and JOINs
+    so that FROM uses the anchor table. This fixes queries that return too few rows
+    (e.g. FROM user JOIN expense JOIN workOrder -> only rows with expense and user).
+    """
+    if not anchor_table or not sql.strip():
+        return sql
+    anchor_lower = anchor_table.lower()
+    from_match = re.search(r"\bFROM\s+(\w+)\b", sql, re.IGNORECASE)
+    if not from_match:
+        return sql
+    current_from = from_match.group(1)
+    base_from = from_secure_view(current_from)
+    if base_from.lower() == anchor_lower:
+        return sql
+
+    # Find anchor as it may appear in SQL (logical or secure)
+    anchor_in_sql = anchor_table
+    if to_secure_view(anchor_table) != anchor_table:
+        anchor_in_sql = to_secure_view(anchor_table)
+    anchor_in_sql_lower = anchor_in_sql.lower()
+
+    # Split into SELECT, FROM+JOINs, and rest (WHERE, GROUP, ORDER, LIMIT)
+    parts = re.split(r"\b(WHERE|GROUP\s+BY|ORDER\s+BY|LIMIT)\b", sql, maxsplit=1, flags=re.IGNORECASE)
+    main_part = parts[0].strip()
+    rest = (" " + " ".join(parts[1:]).strip()) if len(parts) > 1 else ""
+
+    # Parse JOIN lines: "JOIN table ON condition" or "LEFT JOIN table ON condition"
+    join_pattern = re.compile(
+        r"\b(LEFT\s+JOIN|JOIN)\s+(\w+)\s+ON\s+",
+        re.IGNORECASE
+    )
+    joins_with_conditions: List[Tuple[str, str, str]] = []  # (join_type, table, full_line)
+    pos = 0
+    while True:
+        m = join_pattern.search(main_part, pos)
+        if not m:
+            break
+        join_type, table = m.group(1), m.group(2)
+        start = m.start()
+        end = m.end()
+        # Find end of this ON condition (next JOIN/end of main_part)
+        next_join = join_pattern.search(main_part, end)
+        cond_end = next_join.start() if next_join else len(main_part)
+        cond_part = main_part[end:cond_end].strip()
+        # Trim trailing comment or newline
+        cond_part = re.sub(r"\s*--.*$", "", cond_part).strip()
+        full_line = main_part[start:cond_end].strip()
+        joins_with_conditions.append((join_type, table, full_line))
+        pos = cond_end
+
+    # Find the JOIN that introduces the anchor table
+    anchor_join_idx: Optional[int] = None
+    for i, (_, table, full_line) in enumerate(joins_with_conditions):
+        if table.lower() == anchor_in_sql_lower:
+            anchor_join_idx = i
+            break
+        if from_secure_view(table).lower() == anchor_lower:
+            anchor_join_idx = i
+            break
+    if anchor_join_idx is None:
+        logger.warning(
+            f"Anchor table '{anchor_table}' not found in JOINs; cannot rewrite FROM clause"
+        )
+        return sql
+
+    # Get the condition from the join that introduces anchor; the "other" table is the non-anchor table in the condition
+    _, anchor_join_table, anchor_join_line = joins_with_conditions[anchor_join_idx]
+    cond_match = re.search(r"\bON\s+(.+)$", anchor_join_line, re.DOTALL | re.IGNORECASE)
+    on_condition = cond_match.group(1).strip() if cond_match else ""
+    # Parse "table.col = table.col" or "table.col = table.col AND ..." to get the other table (not anchor)
+    other_table = anchor_join_table
+    for side in re.split(r"\s*=\s*", on_condition, maxsplit=1):
+        dot = re.search(r"(\w+)\.\w+", side.strip())
+        if dot:
+            t = dot.group(1)
+            if t.lower() != anchor_in_sql_lower and from_secure_view(t).lower() != anchor_lower:
+                other_table = t
+                break
+
+    # New first JOIN: JOIN other_table ON condition (anchor is now FROM so we keep condition as-is)
+    new_first_join = f"JOIN {other_table} ON {on_condition}"
+
+    # Build new FROM + JOINs: FROM anchor, then the join that was introducing anchor (as JOIN other ON cond)
+    select_from_part = re.sub(r"\bFROM\s+\w+\b", f"FROM {anchor_in_sql}", main_part, count=1, flags=re.IGNORECASE)
+    select_from_part = re.sub(
+        re.escape(joins_with_conditions[anchor_join_idx][2]),
+        new_first_join,
+        select_from_part,
+        count=1,
+    )
+    # When the anchor was not the first JOIN (anchor_join_idx != 0), the original FROM table is now missing
+    # as a JOIN. Replace the first join line (which linked old FROM to next table) with JOIN current_from ON ...
+    if anchor_join_idx != 0 and joins_with_conditions:
+        first_join_line = joins_with_conditions[0][2]
+        first_join_cond = re.search(r"\bON\s+(.+)$", first_join_line, re.DOTALL | re.IGNORECASE)
+        first_join_cond_str = first_join_cond.group(1).strip() if first_join_cond else "1=1"
+        join_old_from = f"JOIN {current_from} ON {first_join_cond_str}"
+        select_from_part = re.sub(re.escape(first_join_line), join_old_from, select_from_part, count=1)
+
+    result = select_from_part + rest
+    logger.info(f"Rewrote SQL to start from anchor table '{anchor_table}' (was FROM {current_from})")
+    return result
 
 
 def _build_domain_filter_instructions(state: SQLGraphState, ctx: SQLContext) -> str:
@@ -318,12 +425,23 @@ def generate_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
             followup_where_clause += "- Focus on selecting the NEW data requested in the current question\n"
             followup_where_clause += "=" * 70 + "\n"
 
+    anchor_instruction = ""
+    if state.get("anchor_table"):
+        anchor_instruction = f"""
+PRIMARY TABLE INSTRUCTION:
+- Start your query with: FROM {state['anchor_table']}
+- This is the main entity the user is asking about
+- Join other tables TO this primary table
+
+"""
+
     prompt = f"""
 Generate a MySQL SELECT query using ONLY the columns shown below.
 
 All tables needed for this query (with their actual columns):
 {schema_context}
 {excluded_columns_hint}
+{anchor_instruction}
 CRITICAL RULES:
 - Use ONLY the columns listed above for each table - do NOT guess or invent column names
 - Follow the JOIN_PATH EXACTLY step by step - do NOT skip any tables or steps
@@ -394,6 +512,8 @@ CRITICAL FORMATTING: Return ONLY the SQL query. Do NOT wrap it in markdown code 
             ]
 
     rewritten_sql = rewrite_secure_tables(raw_sql)
+    if state.get("anchor_table"):
+        rewritten_sql = _rewrite_sql_from_anchor(rewritten_sql, state["anchor_table"])
     logger.info(f"Rewritten SQL (after secure view conversion): {rewritten_sql}")
     state["sql"] = rewritten_sql
     return state

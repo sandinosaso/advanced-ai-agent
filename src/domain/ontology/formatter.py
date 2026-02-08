@@ -61,10 +61,6 @@ def format_domain_context_for_table_selection(resolutions: List[Dict[str, Any]])
                         lines.append(f"    {hint_line}")
                 else:
                     lines.append(f"  Calculation hint: {logic_hint}")
-            if 'dynamic_attribute_keys' in hints:
-                lines.append(f"  Dynamic attribute keys:")
-                for entity, keys in hints['dynamic_attribute_keys'].items():
-                    lines.append(f"    - {entity}: {', '.join(keys)}")
             if 'extraction_pattern' in hints:
                 lines.append(f"  Extraction pattern: {hints['extraction_pattern']}")
         
@@ -126,10 +122,6 @@ def format_domain_context(resolutions: List[Dict[str, Any]]) -> str:
                         lines.append(f"    {hint_line}")
                 else:
                     lines.append(f"  Calculation hint: {logic_hint}")
-            if 'dynamic_attribute_keys' in hints:
-                lines.append(f"  Dynamic attribute keys:")
-                for entity, keys in hints['dynamic_attribute_keys'].items():
-                    lines.append(f"    - {entity}: {', '.join(keys)}")
             if 'extraction_pattern' in hints:
                 lines.append(f"  Extraction pattern: {hints['extraction_pattern']}")
         
