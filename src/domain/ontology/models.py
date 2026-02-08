@@ -18,6 +18,7 @@ class DomainResolution:
     confidence: float
     resolution_strategy: str  # "primary", "secondary", "fallback"
     hints: Optional[Dict[str, Any]] = None  # Optional hints for payroll logic, dynamic attributes, etc.
+    extra: Optional[Dict[str, Any]] = None  # Term-specific attributes (e.g. regular_hours_threshold, rule_source)
 
 
 @dataclass

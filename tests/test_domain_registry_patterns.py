@@ -93,7 +93,7 @@ class TestDomainRegistryPatterns(unittest.TestCase):
         self.assertTrue(any(f.get("column") == "isActive" and f.get("value") == 1 for f in customer_filters))
     
     def test_payroll_rules_resolution(self):
-        """Test that payroll_rules resolves correctly with hints"""
+        """Test that payroll_rules resolves correctly with detailed calculation hints"""
         resolution = self.ontology.resolve_domain_term("payroll_rules")
         
         self.assertIsNotNone(resolution)
@@ -104,10 +104,78 @@ class TestDomainRegistryPatterns(unittest.TestCase):
         self.assertIn("workTime", resolution.tables)
         self.assertIn("crewWorkDay", resolution.tables)
         
-        # Check hints contain logic_hint
+        # Check hints contain logic_hint with detailed formulas
         self.assertIsNotNone(resolution.hints)
         self.assertIn("logic_hint", resolution.hints)
-        self.assertIn("DAYOFWEEK", resolution.hints["logic_hint"])
+        logic_hint = resolution.hints["logic_hint"]
+        
+        # Verify key components of payroll calculation logic
+        self.assertIn("DAYOFWEEK", logic_hint)
+        self.assertIn("LEAST", logic_hint, "Should contain LEAST for regular time cap")
+        self.assertIn("GREATEST", logic_hint, "Should contain GREATEST for overtime calculation")
+        self.assertIn("8", logic_hint, "Should contain the 8-hour threshold")
+        self.assertIn("Group by employee and DATE", logic_hint, "Should specify grouping requirement")
+        self.assertIn("DO NOT use workTimeType", logic_hint, "Should explicitly warn against using workTimeType")
+        
+        # Verify all three formula types are present
+        self.assertIn("Regular Time", logic_hint)
+        self.assertIn("OverTime", logic_hint)
+        self.assertIn("Double Time", logic_hint)
+        
+        # Verify Sunday logic (DAYOFWEEK=1)
+        self.assertIn("DAYOFWEEK(date)=1", logic_hint, "Should specify Sunday as DAYOFWEEK=1")
+        
+        # Verify extra (term-specific attributes) is in resolution.extra, not primary
+        self.assertIsNotNone(resolution.extra, "Should have extra dict for term-specific attributes")
+        self.assertEqual(resolution.extra.get("regular_hours_threshold"), 8)
+        self.assertIn("V1_RULES.md", resolution.extra.get("rule_source", ""))
+    
+    def test_payroll_extra_extraction_via_helper(self):
+        """Test that get_resolution_extra extracts regular_hours_threshold from extra"""
+        from src.domain.ontology.formatter import get_resolution_extra
+        
+        resolution = self.ontology.resolve_domain_term("payroll_rules")
+        res_dict = {
+            "term": resolution.term,
+            "extra": resolution.extra,
+        }
+        
+        threshold = get_resolution_extra(res_dict, "regular_hours_threshold")
+        self.assertEqual(threshold, 8)
+        
+        rule_source = get_resolution_extra(res_dict, "rule_source")
+        self.assertIn("V1_RULES.md", rule_source or "")
+    
+    def test_payroll_alias_extraction(self):
+        """Test that 'payroll' alias is extracted from questions"""
+        # The extractor should recognize "payroll" from the alias
+        terms = self.ontology.extract_domain_terms("I want a Payroll report for employees")
+        
+        # Should extract payroll_rules via the "payroll" alias
+        self.assertIn("payroll_rules", terms, "Should extract payroll_rules when question mentions 'Payroll'")
+    
+    def test_payroll_exclude_bridge_patterns(self):
+        """Test that payroll_rules has exclude_bridge_patterns to prevent unwanted joins"""
+        from src.agents.sql.planning import get_exclude_bridge_patterns
+        
+        resolution = self.ontology.resolve_domain_term("payroll_rules")
+        
+        # Build domain resolutions list as expected by get_exclude_bridge_patterns
+        domain_resolutions = [{
+            "term": "payroll_rules",
+            "entity": resolution.entity,
+            "tables": resolution.tables,
+            "confidence": resolution.confidence
+        }]
+        
+        patterns = get_exclude_bridge_patterns(domain_resolutions, self.ontology)
+        
+        # Should exclude satellite tables that cause 0 rows
+        self.assertIn("expense", patterns, "Should exclude expense table")
+        self.assertIn("attachment", patterns, "Should exclude attachment table")
+        self.assertIn("workTimeType", patterns, "Should exclude workTimeType (we calculate, not read)")
+        self.assertIn("payrollEntry", patterns, "Should exclude payrollEntry (output table)")
+        self.assertIn("payrollBatch", patterns, "Should exclude payrollBatch (output table)")
     
     def test_crew_lead_resolution(self):
         """Test that crew_lead resolves correctly with boolean filter"""

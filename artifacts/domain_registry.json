@@ -288,14 +288,19 @@
     },
     "payroll_rules": {
       "entity": "payroll_calculation",
-      "description": "Business rules for calculating regular, overtime, and double time pay",
+      "description": "Business rules for calculating regular, overtime, and double time pay based on V1_RULES (base-api/packages/api-payroll/V1_RULES.md). Mon-Sat: first 8 hrs = regular, over 8 = overtime. Sunday: all hours = double time.",
       "aliases": ["payroll"],
       "resolution": {
         "primary": {
           "tables": ["workTime", "travelTime", "crewWorkDay", "crew", "workOrder", "employee"],
           "match_type": "structural",
           "confidence": 1.0,
-          "logic_hint": "CASE WHEN DAYOFWEEK(date)=1 THEN double_time ELSE IF hours<=8 THEN regular ELSE overtime END"
+          "exclude_bridge_patterns": ["expense", "attachment", "payrollEntry", "payrollBatch", "workTimeType", "employeeCrew", "employeeRole", "serviceLocation"],
+          "logic_hint": "V1 Payroll Calculation - CRITICAL: DO NOT use workTimeType.name to categorize. Calculate from raw hours and date using these EXACT formulas:\n\n=== GROUPING ===\nGROUP BY secure_employee.id, secure_employee.firstName, secure_employee.lastName, crewWorkDay.date\n\n=== EXACT SELECT COLUMNS (copy exactly, SUM is INSIDE the CASE) ===\n\nRegular Time AS regularTime:\nCASE WHEN DAYOFWEEK(crewWorkDay.date) = 1 THEN 0 ELSE LEAST(SUM(COALESCE(workTime.hours, 0)), 8) END\n\nOverTime AS overtime:\nCASE WHEN DAYOFWEEK(crewWorkDay.date) = 1 THEN 0 ELSE GREATEST(SUM(COALESCE(workTime.hours, 0)) - 8, 0) END\n\nDouble Time AS doubleTime:\nCASE WHEN DAYOFWEEK(crewWorkDay.date) = 1 THEN SUM(COALESCE(workTime.hours, 0)) ELSE 0 END\n\nTotal Hours AS totalHours:\nSUM(COALESCE(workTime.hours, 0))\n\n=== CRITICAL NOTES ===\n1. DAYOFWEEK(date)=1 is Sunday in MySQL\n2. For Regular and OverTime: IF Sunday THEN 0, ELSE calculate\n3. For Double Time: IF Sunday THEN all hours, ELSE 0\n4. The number 8 is the daily regular hours threshold\n5. SUM must be INSIDE the CASE/LEAST/GREATEST (sum first, then cap/split)\n6. DO NOT wrap in another SUM() - the formulas already have SUM inside\n7. Use crewWorkDay.date for the date (has the date column)\n8. Join: workTime → crewWorkDay (for date) → crew → workOrder (for filtering)\n9. DO NOT join to workTimeType - we are calculating the categories, not reading them\n\n=== WRONG PATTERNS TO AVOID ===\nWRONG: SUM(CASE WHEN DAYOFWEEK(date)=1 THEN GREATEST(hours-8,0) ELSE 0 END) -- backwards logic!\nRIGHT: CASE WHEN DAYOFWEEK(date)=1 THEN 0 ELSE GREATEST(SUM(hours)-8,0) END\n\nWRONG: SUM(CASE ... LEAST(hours, 8) ...) -- caps each row at 8, then sums (wrong!)\nRIGHT: CASE ... LEAST(SUM(hours), 8) ... -- sums all rows, then caps at 8 (correct!)"
+        },
+        "extra": {
+          "regular_hours_threshold": 8,
+          "rule_source": "base-api/packages/api-payroll/V1_RULES.md"
         }
       }
     },
@@ -351,12 +356,6 @@
       {
         "column": "isActive",
         "value": 1
-      }
-    ],
-    "inspection": [
-      {
-        "column": "isInternal",
-        "value": 0
       }
     ]
   }

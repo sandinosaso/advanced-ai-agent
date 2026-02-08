@@ -59,7 +59,15 @@ class DomainTermExtractor:
         """
         terms = self.registry.get("terms", {})
         known_terms = list(terms.keys())
-        atomic_terms = [t for t in known_terms if "_" not in t][:15]
+        # Include both atomic terms (no underscore) and their aliases
+        atomic_terms = [t for t in known_terms if "_" not in t]
+        # Also collect aliases from compound terms (those with underscores)
+        for term_key, term_data in terms.items():
+            if "_" in term_key and "aliases" in term_data:
+                atomic_terms.extend(term_data["aliases"])
+        # Deduplicate and limit to 20 for prompt brevity
+        atomic_terms = list(dict.fromkeys(atomic_terms))[:20]
+        
         negative_rule = f"""
 NEGATIVE RULE (STRICT) — This rule OVERRIDES all other heuristics.
 If the question does NOT explicitly mention any of: "question", "questions", "answer", "answers", "form", "checklist"
@@ -74,7 +82,7 @@ RULES for atomic signal detection:
 - You may return signals that are not in the known list (e.g. "inspection" as an internal signal).
 - Return a JSON array of strings. No markdown, no explanation.
 """
-        examples = "Examples: \"Find crane inspections\" → [\"crane\", \"inspection\"]. \"Show questions for that inspection\" → [\"inspection\", \"question\"]."
+        examples = "Examples: \"Find crane inspections\" → [\"crane\", \"inspection\"]. \"Show questions for that inspection\" → [\"inspection\", \"question\"]. \"Payroll report\" → [\"payroll\"]."
         return f"""From the question below, identify ONLY ATOMIC (single-concept) signals.
 {negative_rule}
 {atomic_rules}
@@ -154,6 +162,10 @@ Return ONLY a JSON array of strings, e.g. ["crane", "inspection"]."""
                 if any(s.lower() == term.lower() for s in atomic_signals):
                     result.append(term)
                 elif aliases and any(s.lower() in [a.lower() for a in aliases] for s in atomic_signals):
+                    result.append(term)
+                elif aliases and any(a.lower() in question_lower for a in aliases):
+                    # Multi-word aliases (e.g. "dynamic attribute"): LLM returns single words;
+                    # check if question contains the full alias phrase
                     result.append(term)
                 continue
 

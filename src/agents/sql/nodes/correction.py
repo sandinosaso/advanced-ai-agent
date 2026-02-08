@@ -14,7 +14,6 @@ from src.sql.execution.secure_rewriter import rewrite_secure_tables, from_secure
 from src.agents.sql.prompt_helpers import build_duplicate_join_example
 from src.agents.sql.planning import get_required_join_constraints
 
-
 def _extract_sql_from_markdown(text: str) -> str:
     """
     Extract SQL from a markdown code block anywhere in the text.

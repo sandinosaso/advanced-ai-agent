@@ -96,6 +96,9 @@ def resolve_domain_terms_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraph
                 # Include hints if present
                 if resolution.hints:
                     res_dict["hints"] = resolution.hints
+                # Include extra (term-specific attributes) if present
+                if resolution.extra:
+                    res_dict["extra"] = resolution.extra
                 resolutions.append(res_dict)
         except Exception as e:
             logger.error(f"Failed to resolve domain term '{term}': {e}")

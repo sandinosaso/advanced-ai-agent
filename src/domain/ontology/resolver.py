@@ -70,15 +70,15 @@ class DomainTermResolver:
         
         # Try primary resolution first
         if "primary" in resolution:
-            return self._build_resolution(term, entity, resolution["primary"], "primary")
+            return self._build_resolution(term, entity, resolution["primary"], "primary", resolution.get("extra"))
         
         # Try secondary
         if "secondary" in resolution:
-            return self._build_resolution(term, entity, resolution["secondary"], "secondary")
+            return self._build_resolution(term, entity, resolution["secondary"], "secondary", resolution.get("extra"))
         
         # Try fallback
         if "fallback" in resolution:
-            return self._build_resolution(term, entity, resolution["fallback"], "fallback")
+            return self._build_resolution(term, entity, resolution["fallback"], "fallback", resolution.get("extra"))
         
         logger.warning(f"No resolution strategies found for term '{term}'")
         return None
@@ -88,7 +88,8 @@ class DomainTermResolver:
         term: str,
         entity: str,
         strategy_config: Dict[str, Any],
-        strategy_name: str
+        strategy_name: str,
+        extra: Optional[Dict[str, Any]] = None
     ) -> DomainResolution:
         """
         Build DomainResolution from strategy configuration.
@@ -198,7 +199,8 @@ class DomainTermResolver:
             filters=filters,
             confidence=confidence,
             resolution_strategy=strategy_name,
-            hints=hints if hints else None
+            hints=hints if hints else None,
+            extra=extra
         )
         
         logger.debug(f"Resolved '{term}' using {strategy_name} strategy: {len(tables)} tables, {len(filters)} filters, hints: {bool(hints)}")

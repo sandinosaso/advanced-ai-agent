@@ -268,6 +268,8 @@ NOTES:
 - brief reasoning about path choice
 - explicitly state if using bridge tables and why
 - mention which tables use LEFT JOIN and why
+
+IMPORTANT: Do NOT include SQL code in this response. Only provide the JOIN_PATH and NOTES as specified above.
 """
 
     logger.debug(f"[PROMPT] plan_joins prompt:\n{prompt}")

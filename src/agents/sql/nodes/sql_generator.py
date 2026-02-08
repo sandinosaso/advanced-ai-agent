@@ -10,7 +10,7 @@ from src.agents.sql.state import SQLGraphState
 from src.agents.sql.context import SQLContext
 from src.agents.sql.utils import trace_step
 from src.config.settings import settings
-from src.domain.ontology.formatter import build_where_clauses
+from src.domain.ontology.formatter import build_where_clauses, format_domain_context
 from src.sql.execution.secure_rewriter import rewrite_secure_tables
 from src.agents.sql.planning import (
     extract_tables_from_join_plan,
@@ -71,9 +71,17 @@ def get_default_table_filter_clauses(selected_tables: List[str], registry: Dict[
 
 
 def _build_domain_filter_instructions(state: SQLGraphState, ctx: SQLContext) -> str:
-    """Build instructions for domain filters in SQL generation prompt"""
+    """Build instructions for domain filters and calculation hints in SQL generation prompt"""
     domain_resolutions = state.get("domain_resolutions", [])
     selected_tables = state.get("tables", [])
+    
+    instructions = ""
+    
+    # First, include full domain context (with calculation hints)
+    if domain_resolutions:
+        domain_context = format_domain_context(domain_resolutions)
+        if domain_context:
+            instructions += "\n\n" + domain_context + "\n"
     
     # Get domain-based WHERE clauses
     domain_clauses = build_where_clauses(domain_resolutions) if domain_resolutions else []
@@ -86,14 +94,12 @@ def _build_domain_filter_instructions(state: SQLGraphState, ctx: SQLContext) -> 
     # Merge all clauses
     all_clauses = domain_clauses + default_clauses
     
-    if not all_clauses:
-        return ""
-
-    instructions = "\n\nDOMAIN FILTER REQUIREMENTS:\n"
-    instructions += "You MUST include these WHERE clause conditions to filter by domain concepts:\n"
-    for clause in all_clauses:
-        instructions += f"  - {clause}\n"
-    instructions += "\nCombine these with AND in your WHERE clause.\n"
+    if all_clauses:
+        instructions += "\n\nDOMAIN FILTER REQUIREMENTS:\n"
+        instructions += "You MUST include these WHERE clause conditions to filter by domain concepts:\n"
+        for clause in all_clauses:
+            instructions += f"  - {clause}\n"
+        instructions += "\nCombine these with AND in your WHERE clause.\n"
 
     return instructions
 
@@ -345,7 +351,8 @@ Join plan (follow this EXACTLY, step by step):
 
 IMPORTANT: {bridge_example} Only include bridge tables if they are explicitly listed in the JOIN_PATH above. Do NOT add unnecessary bridge tables when direct foreign keys exist.
 {_build_domain_filter_instructions(state, ctx)}
-Return ONLY the SQL query, nothing else.
+
+CRITICAL FORMATTING: Return ONLY the SQL query. Do NOT wrap it in markdown code blocks (no ```sql). Just return the raw SQL query text.
 """
 
     logger.info(f"[PROMPT] generate_sql prompt:\n{prompt}")

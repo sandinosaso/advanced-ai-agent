@@ -130,6 +130,60 @@ workTime
 - `CASE WHEN DAYOFWEEK(date)=1 THEN SUM(hours) ELSE 0 END` AS Double Time
 - `CASE...END` AS Total Time
 
+**Payroll Calculation Logic Explained:**
+
+This query implements V1 payroll rules (source: `base-api/packages/api-payroll/V1_RULES.md`):
+
+1. **Business Rules:**
+   - **Monday-Saturday:** First 8 hours = REGULAR, hours beyond 8 = OVERTIME
+   - **Sunday:** All hours = DOUBLE_TIME (no regular or overtime)
+
+2. **Why LEAST, GREATEST, and the constant 8:**
+   - **8** = Regular work hours threshold (from V1_RULES)
+   - **Daily total** = `SUM(hours)` grouped by employee and date
+   - **Regular Time** = `LEAST(SUM(hours), 8)` caps at 8 hours (minimum of daily total and 8)
+   - **OverTime** = `GREATEST(SUM(hours) - 8, 0)` only counts hours above 8 (maximum of 0 and daily total minus 8)
+   - **DAYOFWEEK(date) = 1** = Sunday in MySQL (1 = Sunday)
+
+3. **SQL Formula Breakdown (CRITICAL: SUM is INSIDE the CASE):**
+   ```sql
+   -- Regular Time (Mon-Sat: first 8 hours, Sun: 0)
+   CASE WHEN DAYOFWEEK(date)=1 THEN 0 
+        ELSE LEAST(SUM(hours), 8) 
+   END
+   
+   -- OverTime (Mon-Sat: hours over 8, Sun: 0)
+   CASE WHEN DAYOFWEEK(date)=1 THEN 0 
+        ELSE GREATEST(SUM(hours)-8, 0) 
+   END
+   
+   -- Double Time (Sun: all hours, Mon-Sat: 0)
+   CASE WHEN DAYOFWEEK(date)=1 THEN SUM(hours) 
+        ELSE 0 
+   END
+   ```
+
+4. **Bridge Table Exclusions:**
+   To prevent unnecessary joins that can cause 0 rows, the following tables are excluded from bridge discovery:
+   - `expense` - Financial data, not needed for hour calculations
+   - `attachment` - File attachments, not needed for hour calculations
+   - `payrollEntry`, `payrollBatch` - Final payroll output tables (we're calculating input)
+   - `workTimeType` - Category labels (we calculate categories, not read them)
+   - `employeeCrew`, `employeeRole`, `serviceLocation` - Assignment tables that can create unwanted joins
+   
+   **Order of Operations:**
+   - First: SUM all hours for that employee on that date
+   - Then: Apply LEAST (cap at 8) or GREATEST (only over 8)
+   - NOT: Cap each row then sum (that would be wrong!)
+   
+   **THEN/ELSE Logic:**
+   - Regular & OverTime: IF Sunday THEN 0, ELSE calculate
+   - Double Time: IF Sunday THEN all hours, ELSE 0
+
+4. **Key Pattern:** This calculates regular/overtime/double from **raw hours + date**, NOT from `workTimeType.name`. The agent must group by employee and date, then apply these formulas.
+
+5. **Domain Registry:** This payroll calculation logic is now represented in `domain_registry.json` under `payroll_rules` to guide the AI agent.
+
 **WHERE Conditions:**
 - `cwd.date IS NOT NULL`
 - `sw.isInternal = 0`
@@ -149,9 +203,10 @@ workTime
 - **Bridge Tables:** crew (connects workTime → workOrder)
 - **Complexity Score:** 8/10
 
-**Domain Coverage:** ❌ None
-- No domain rules for payroll calculations
-- Business logic embedded in SQL (Sunday = double time)
+**Domain Coverage:** ✅ Full (as of this update)
+- Payroll calculation rules now represented in `domain_registry.json` under `payroll_rules`
+- References V1_RULES.md for business logic alignment
+- Agent should use formula-based calculation (LEAST/GREATEST) not workTimeType categorization
 
 ---
 
@@ -2198,20 +2253,15 @@ These are test reports, simple queries, or duplicates:
 
 ### High Priority Additions
 
-1. **Payroll Calculation Rule**
-   ```json
-   "payroll_rules": {
-     "entity": "payroll_calculation",
-     "description": "Business rules for calculating regular, overtime, and double time",
-     "resolution": {
-       "primary": {
-         "logic": "CASE WHEN DAYOFWEEK(date)=1 THEN double_time ELSE IF hours<=8 THEN regular ELSE overtime",
-         "tables": ["workTime", "travelTime", "crewWorkDay"],
-         "confidence": 1.0
-       }
-     }
-   }
-   ```
+1. **Payroll Calculation Rule** ✅ IMPLEMENTED
+   
+   Now implemented in `domain_registry.json` with detailed formulas. See the enriched `payroll_rules` entry which includes:
+   - Exact SQL formulas for Regular/Overtime/Double Time calculations
+   - Grouping requirements (by employee and date)
+   - Reference to V1_RULES.md business logic
+   - Explicit instruction not to use workTimeType for categorization
+   
+   This guides the agent to generate formula-based payroll calculations matching the Smart Reports and V1_RULES.
 
 2. **Production Data Filtering**
    ```json
