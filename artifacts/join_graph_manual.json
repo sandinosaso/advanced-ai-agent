@@ -376,8 +376,10 @@
         "expense": {
             "role": "instance",
             "category": "financial",
-            "description": "Job-related expenses - instance data, not a bridge",
-            "exclude_as_bridge_for": ["workOrder", "employee", "crew"]
+            "description": "Job-related expenses - instance data, not a bridge. Only include when explicitly requested.",
+            "use_as_bridge": false,
+            "exclude_as_bridge_for": ["workOrder", "employee", "crew"],
+            "note": "Financial expense records - only include when explicitly requested. Do NOT auto-add as bridge."
         },
         "user": {
             "role": "satellite",

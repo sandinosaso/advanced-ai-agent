@@ -3,6 +3,7 @@ Bridge table discovery for SQL join planning
 """
 
 from typing import Dict, Any, List, Set
+from collections import deque
 from loguru import logger
 
 
@@ -65,8 +66,14 @@ def find_bridge_tables(
 
     def should_exclude_table(table_name: str) -> bool:
         """Check if table should be excluded from bridge consideration."""
-        # Check semantic role - exclude satellites
         metadata = table_metadata.get(table_name, {})
+        
+        # Check if explicitly marked as non-bridge
+        if metadata.get("use_as_bridge") is False:
+            logger.debug(f"Excluding table '{table_name}' - marked as use_as_bridge=false")
+            return True
+        
+        # Check semantic role - exclude satellites
         role = metadata.get("role")
         
         if role == "satellite":
@@ -89,6 +96,54 @@ def find_bridge_tables(
     def has_direct_path(table1: str, table2: str) -> bool:
         """Check if two tables have a direct relationship."""
         return table2 in direct_connections.get(table1, set())
+    
+    def has_path_through_selected(table1: str, table2: str, selected_tables: set) -> bool:
+        """
+        Check if two tables can be connected through already-selected tables.
+        
+        Uses BFS to find if a path exists using only selected tables as intermediates.
+        This prevents adding unnecessary bridge tables when a transitive path already
+        exists through the selected tables.
+        
+        Args:
+            table1: First table
+            table2: Second table
+            selected_tables: Set of already-selected table names
+            
+        Returns:
+            True if a path exists through selected tables, False otherwise
+            
+        Example:
+            Selected: ['workOrder', 'crew', 'employeeCrew', 'employee']
+            Check: has_path_through_selected('workOrder', 'employee', selected)
+            Result: True (path: workOrder → crew → employeeCrew → employee)
+        """
+        # Direct connection (1-hop)
+        if table2 in direct_connections.get(table1, set()):
+            return True
+        
+        # BFS to find transitive path through selected tables only
+        visited = set()
+        queue = deque([table1])
+        
+        while queue:
+            current = queue.popleft()
+            if current in visited:
+                continue
+            visited.add(current)
+            
+            # Found target
+            if current == table2:
+                logger.debug(f"Found path from {table1} to {table2} through selected tables")
+                return True
+            
+            # Explore neighbors that are in selected_tables
+            for neighbor in direct_connections.get(current, set()):
+                if neighbor in selected_tables and neighbor not in visited:
+                    queue.append(neighbor)
+        
+        logger.debug(f"No path from {table1} to {table2} through selected tables")
+        return False
 
     for rel in relationships:
         from_table_orig = rel.get("from_table", "")
@@ -146,22 +201,23 @@ def find_bridge_tables(
                     if should_skip:
                         continue
                 
-                # Check if direct paths already exist between all connected tables
+                # Check if paths already exist between all connected tables (direct or transitive)
                 # If so, this bridge is not needed
                 connected_list = list(canonical_connected)
-                all_have_direct = True
+                all_have_path = True
                 for i, t1 in enumerate(connected_list):
                     for t2 in connected_list[i + 1:]:
-                        if not has_direct_path(t1, t2):
-                            all_have_direct = False
+                        # Check both direct AND transitive paths through selected tables
+                        if not has_path_through_selected(t1, t2, selected_lower):
+                            all_have_path = False
                             break
-                    if not all_have_direct:
+                    if not all_have_path:
                         break
                 
-                if all_have_direct:
+                if all_have_path:
                     logger.info(
-                        f"Skipping bridge table '{original_name}' - direct paths already exist "
-                        f"between connected tables: {list(canonical_connected)}"
+                        f"Skipping bridge table '{original_name}' - paths already exist "
+                        f"between connected tables (direct or through selected): {list(canonical_connected)}"
                     )
                     continue
                 

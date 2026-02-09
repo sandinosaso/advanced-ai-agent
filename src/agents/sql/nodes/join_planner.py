@@ -86,6 +86,9 @@ def filter_relationships_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraph
         logger.info(f"Auto-adding {len(bridge_tables)} bridge tables: {bridge_tables}")
         selected.update(bridge_tables)
         state["tables"] = list(selected)
+        # Track which tables were auto-added (not explicitly requested)
+        # These will default to LEFT JOIN to prevent data loss if incorrectly identified
+        state["auto_added_bridges"] = list(bridge_tables)
 
     excluded_columns = get_excluded_columns(
         state.get("domain_resolutions", []), ctx.domain_ontology, ctx.join_graph["tables"]
@@ -265,7 +268,12 @@ def plan_joins_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     )
     
     # Get join type hints (LEFT JOIN vs JOIN)
-    join_type_hints = get_join_type_hints(selected_tables, ctx.join_graph)
+    # Pass auto-added bridges so they can default to LEFT JOIN
+    join_type_hints = get_join_type_hints(
+        selected_tables, 
+        ctx.join_graph,
+        state.get("auto_added_bridges", [])
+    )
 
     prompt = f"""
 You are planning SQL joins. You MUST ONLY use the allowed relationships.

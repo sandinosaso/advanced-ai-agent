@@ -365,6 +365,24 @@
         }
       }
     },
+    "expenses": {
+      "entity": "expense",
+      "description": "Financial expenses and costs related to work orders or employees. Only include when explicitly asking about expenses, costs, spending, or financial information. Do NOT auto-add as bridge table.",
+      "aliases": ["expense", "expenses", "cost", "costs", "spending", "financial", "money", "budget"],
+      "resolution": {
+        "primary": {
+          "tables": ["expense", "expenseType"],
+          "match_type": "structural",
+          "confidence": 1.0,
+          "anchor_table": "expense",
+          "note": "Only use expense table when user explicitly asks about financial data. Do NOT auto-add as bridge between workOrder and employee.",
+          "required_joins": [
+            "expense.expenseTypeId = expenseType.id"
+          ],
+          "display_hint": "SELECT expenseType.name AS expenseType, expense.amount, expense.date (do NOT select expense.id unless explicitly requested)"
+        }
+      }
+    },
     "payroll_rules": {
       "entity": "payroll_calculation",
       "description": "Business rules for calculating regular, overtime, and double time pay based on V1_RULES (base-api/packages/api-payroll/V1_RULES.md). Mon-Sat: first 8 hrs = regular, over 8 = overtime. Sunday: all hours = double time.",
