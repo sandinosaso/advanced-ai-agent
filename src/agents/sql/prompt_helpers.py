@@ -279,56 +279,7 @@ def build_bridge_table_example(join_graph: Dict[str, Any]) -> str:
     )
 
 
-def build_duplicate_join_example(join_graph: Dict[str, Any]) -> str:
-    """
-    Build a dynamic duplicate join error example from join graph.
-    
-    Args:
-        join_graph: Join graph containing relationships
-        
-    Returns:
-        Example string with real or generic table names
-    """
-    # Try to find a table with multiple foreign keys
-    if join_graph and "tables" in join_graph:
-        for table_name, table_info in join_graph["tables"].items():
-            columns = table_info.get("columns", [])
-            fk_cols = [c for c in columns if c.endswith("Id") and c != "id"]
-            
-            if len(fk_cols) >= 2:
-                # Found a table with multiple FKs
-                fk1, fk2 = fk_cols[:2]
-                ref_table1 = fk1.replace("Id", "")
-                ref_table2 = fk2.replace("Id", "")
-                
-                return f"""COMMON CAUSES:
-1. Same table joined twice with different conditions:
-   BAD:
-   JOIN {table_name} ON {table_name}.{fk1} = {ref_table1}.id
-   JOIN {table_name} ON {table_name}.{fk2} = {ref_table2}.id
 
-   GOOD (pick the most direct path):
-   JOIN {table_name} ON {table_name}.{fk2} = {ref_table2}.id
-
-2. Trying to use multiple join paths to the same table:
-   - Choose the SHORTEST path with HIGHEST confidence
-   - Use direct foreign key relationships when available
-   - NOT indirect paths through multiple tables"""
-    
-    # Generic fallback
-    return """COMMON CAUSES:
-1. Same table joined twice with different conditions:
-   BAD:
-   JOIN tableA ON tableA.fkId1 = tableB.id
-   JOIN tableA ON tableA.fkId2 = tableC.id
-
-   GOOD (pick the most direct path):
-   JOIN tableA ON tableA.fkId2 = tableC.id
-
-2. Trying to use multiple join paths to the same table:
-   - Choose the SHORTEST path with HIGHEST confidence
-   - Use direct foreign key relationships when available
-   - NOT indirect paths through multiple tables"""
 
 
 def get_most_connected_tables(join_graph: Dict[str, Any], n: int = 5) -> List[str]:
