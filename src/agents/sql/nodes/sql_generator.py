@@ -28,6 +28,45 @@ from src.agents.sql.prompt_helpers import (
 )
 
 
+def _validate_select_tables(sql: str) -> None:
+    """
+    Validate that all tables referenced in SELECT are present in FROM/JOIN.
+    Logs a warning if a table is referenced in SELECT but not joined.
+    """
+    if not sql or not sql.strip():
+        return
+    
+    # Extract SELECT clause
+    select_match = re.search(r"\bSELECT\s+(.*?)\s+FROM\s+", sql, re.DOTALL | re.IGNORECASE)
+    if not select_match:
+        return
+    select_clause = select_match.group(1)
+    
+    # Extract table names from SELECT (e.g. "table.column")
+    select_tables = set()
+    for match in re.finditer(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\.[a-zA-Z_]", select_clause):
+        select_tables.add(match.group(1))
+    
+    # Extract tables from FROM/JOIN
+    from_join_tables = set()
+    # Match FROM table or JOIN table (with or without AS alias)
+    for match in re.finditer(
+        r"\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+        sql,
+        re.IGNORECASE
+    ):
+        from_join_tables.add(match.group(1))
+    
+    # Check for missing tables
+    missing_tables = select_tables - from_join_tables
+    if missing_tables:
+        logger.warning(
+            f"SELECT references tables not in FROM/JOIN: {missing_tables}. "
+            f"This will cause 'Unknown column' errors. "
+            f"Make sure template tables are included in join path."
+        )
+
+
 def get_default_table_filter_clauses(selected_tables: List[str], registry: Dict[str, Any]) -> List[str]:
     """
     Build WHERE clause fragments from default table filters.
@@ -175,6 +214,24 @@ def _rewrite_sql_from_anchor(sql: str, anchor_table: str) -> str:
     result = select_from_part + rest
     logger.info(f"Rewrote SQL to start from anchor table '{anchor_table}' (was FROM {current_from})")
     return result
+
+
+def _build_domain_required_joins_section(state: SQLGraphState) -> str:
+    """Build section for domain-required joins that must be included in JOIN_PATH"""
+    domain_joins = state.get("domain_required_joins", [])
+    
+    if not domain_joins:
+        return ""
+    
+    section = "\n\nDOMAIN-REQUIRED JOINS (MUST INCLUDE):\n"
+    section += "The following joins are REQUIRED by domain concepts and MUST be included:\n"
+    for dj in domain_joins:
+        section += f"- JOIN: {dj['condition']} (N:1, 1.00)\n"
+        section += f"  Note: {dj['note']}\n"
+    section += "\nThese joins are MANDATORY. Include them even if not in suggested paths above.\n"
+    section += "They ensure that human-readable names and domain-specific data are available.\n"
+    
+    return section
 
 
 def _build_domain_filter_instructions(state: SQLGraphState, ctx: SQLContext) -> str:
@@ -444,6 +501,9 @@ All tables needed for this query (with their actual columns):
 {anchor_instruction}
 CRITICAL RULES:
 - Use ONLY the columns listed above for each table - do NOT guess or invent column names
+- DO NOT select id, createdBy, updatedBy, createdAt, updatedAt columns UNLESS:
+  * The table is workOrder or inspection (these explicitly show id)
+  * The user explicitly asks for IDs or audit fields
 - Follow the JOIN_PATH EXACTLY step by step - do NOT skip any tables or steps
 - Include ALL tables shown above in your FROM/JOIN clauses
 - Do NOT try to join tables directly if JOIN_PATH shows they require a bridge table
@@ -466,6 +526,7 @@ Join plan (follow this EXACTLY, step by step):
 {state['join_plan']}
 
 {"EXPLICIT JOIN STEPS (follow these in order):" + chr(10) + chr(10).join(f"{i+1}. {step}" for i, step in enumerate(join_path_steps)) if join_path_steps else ""}
+{_build_domain_required_joins_section(state)}
 
 IMPORTANT: {bridge_example} Only include bridge tables if they are explicitly listed in the JOIN_PATH above. Do NOT add unnecessary bridge tables when direct foreign keys exist.
 {_build_domain_filter_instructions(state, ctx)}
@@ -480,6 +541,9 @@ CRITICAL FORMATTING: Return ONLY the SQL query. Do NOT wrap it in markdown code 
         lines = raw_sql.split("\n")
         raw_sql = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
     logger.info(f"Generated SQL (before rewriting): {raw_sql}")
+
+    # Validate that SELECT doesn't reference tables not in FROM/JOIN
+    _validate_select_tables(raw_sql)
 
     domain_resolutions = state.get("domain_resolutions", [])
     

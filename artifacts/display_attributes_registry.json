@@ -4,7 +4,6 @@
   "tables": {
     "asset": {
       "display_columns": [
-        "id",
         "name",
         "modelNumber",
         "serialNumber"
@@ -15,7 +14,6 @@
     },
     "assetType": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -24,7 +22,6 @@
     },
     "attachment": {
       "display_columns": [
-        "id",
         "description"
       ],
       "primary_label": [
@@ -33,23 +30,25 @@
     },
     "attachmentType": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
         "name"
       ]
     },
+    "crew": {
+      "display_columns": [],
+      "primary_label": [],
+      "description": "Crew has no direct name - join to employeeCrew and employee for member names"
+    },
     "crewWorkDay": {
       "display_columns": [
-        "id",
         "date"
       ],
       "primary_label": []
     },
     "customer": {
       "display_columns": [
-        "id",
         "customerNo",
         "zipCode",
         "countryCode",
@@ -62,7 +61,6 @@
     },
     "customerContact": {
       "display_columns": [
-        "id",
         "name",
         "email",
         "phone"
@@ -73,7 +71,6 @@
     },
     "customerLocation": {
       "display_columns": [
-        "id",
         "shipToCode",
         "shipToZipCode",
         "shipToCountryCode",
@@ -83,7 +80,6 @@
     },
     "dynamicAttribute": {
       "display_columns": [
-        "id",
         "name",
         "label",
         "description"
@@ -94,7 +90,6 @@
     },
     "employee": {
       "display_columns": [
-        "id",
         "firstName",
         "lastName",
         "email",
@@ -108,7 +103,6 @@
     },
     "employeeRole": {
       "display_columns": [
-        "id",
         "name",
         "isActive"
       ],
@@ -118,7 +112,6 @@
     },
     "employeeRolePerDiemRule": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -127,16 +120,28 @@
     },
     "employeeRoleScope": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
         "name"
       ]
     },
+    "employeeCrew": {
+      "display_columns": [
+        "isLead"
+      ],
+      "primary_label": [],
+      "description": "Shows if employee is lead; join to employee for names and employeeRole for role"
+    },
+    "equipment": {
+      "display_columns": [
+        "quantity"
+      ],
+      "primary_label": [],
+      "description": "Equipment quantity is useful, but name comes from equipmentOption.name"
+    },
     "equipmentCategory": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -145,7 +150,6 @@
     },
     "equipmentOption": {
       "display_columns": [
-        "id",
         "name",
         "isActive"
       ],
@@ -155,7 +159,6 @@
     },
     "expense": {
       "display_columns": [
-        "id",
         "description",
         "status",
         "date"
@@ -166,7 +169,6 @@
     },
     "expenseAttachment": {
       "display_columns": [
-        "id",
         "description"
       ],
       "primary_label": [
@@ -175,7 +177,6 @@
     },
     "expenseType": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -203,7 +204,6 @@
     },
     "inspectionCertificationStatusOption": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -212,7 +212,6 @@
     },
     "inspectionQAAttachment": {
       "display_columns": [
-        "id",
         "description"
       ],
       "primary_label": [
@@ -221,7 +220,6 @@
     },
     "inspectionQAAttachmentType": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -230,21 +228,18 @@
     },
     "inspectionQuestion": {
       "display_columns": [
-        "id",
         "questionOptions"
       ],
       "primary_label": []
     },
     "inspectionQuestionAnswerOption": {
       "display_columns": [
-        "id",
         "inspectionQuestionOptionId"
       ],
       "primary_label": []
     },
     "inspectionQuestionGroup": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -253,7 +248,6 @@
     },
     "inspectionQuestionType": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -262,7 +256,6 @@
     },
     "inspectionQuestionTypeOptionCategory": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -271,7 +264,6 @@
     },
     "inspectionSection": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -280,7 +272,6 @@
     },
     "inspectionTemplate": {
       "display_columns": [
-        "id",
         "name",
         "status"
       ],
@@ -290,7 +281,6 @@
     },
     "inspectionTemplateWorkOrder": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -299,7 +289,6 @@
     },
     "jobType": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -308,7 +297,6 @@
     },
     "nonJobTime": {
       "display_columns": [
-        "id",
         "nonJobTimeTypeId",
         "date"
       ],
@@ -316,7 +304,6 @@
     },
     "nonJobTimeType": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -325,14 +312,12 @@
     },
     "note": {
       "display_columns": [
-        "id",
         "noteTypeId"
       ],
       "primary_label": []
     },
     "noteType": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -341,7 +326,6 @@
     },
     "package": {
       "display_columns": [
-        "id",
         "name",
         "isActive"
       ],
@@ -351,7 +335,6 @@
     },
     "payrollBatch": {
       "display_columns": [
-        "id",
         "name",
         "notes",
         "status"
@@ -362,7 +345,6 @@
     },
     "payrollEntry": {
       "display_columns": [
-        "id",
         "status",
         "date"
       ],
@@ -370,7 +352,6 @@
     },
     "payrollRule": {
       "display_columns": [
-        "id",
         "name",
         "description",
         "isActive"
@@ -381,7 +362,6 @@
     },
     "quote": {
       "display_columns": [
-        "id",
         "description",
         "quoteNumber",
         "jobNotes"
@@ -392,7 +372,6 @@
     },
     "quoteItem": {
       "display_columns": [
-        "id",
         "description"
       ],
       "primary_label": [
@@ -401,7 +380,6 @@
     },
     "quoteStatus": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -410,7 +388,6 @@
     },
     "quoteStatusCategory": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -419,7 +396,6 @@
     },
     "recurringWorkOrderRule": {
       "display_columns": [
-        "id",
         "description",
         "isActive"
       ],
@@ -429,7 +405,6 @@
     },
     "safety": {
       "display_columns": [
-        "id",
         "noSignatureReason",
         "status",
         "date"
@@ -448,7 +423,6 @@
     },
     "safetyQAAttachment": {
       "display_columns": [
-        "id",
         "description"
       ],
       "primary_label": [
@@ -457,7 +431,6 @@
     },
     "safetyQAAttachmentType": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -466,21 +439,18 @@
     },
     "safetyQuestion": {
       "display_columns": [
-        "id",
         "questionOptions"
       ],
       "primary_label": []
     },
     "safetyQuestionAnswerOption": {
       "display_columns": [
-        "id",
         "safetyQuestionOptionId"
       ],
       "primary_label": []
     },
     "safetyQuestionGroup": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -489,7 +459,6 @@
     },
     "safetyQuestionType": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -498,7 +467,6 @@
     },
     "safetySection": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -507,7 +475,6 @@
     },
     "safetyTemplate": {
       "display_columns": [
-        "id",
         "name",
         "status"
       ],
@@ -517,14 +484,12 @@
     },
     "safetyTemplateConfiguration": {
       "display_columns": [
-        "id",
         "isEmailNotificationEnabled"
       ],
       "primary_label": []
     },
     "service": {
       "display_columns": [
-        "id",
         "noSignatureReason",
         "status",
         "date"
@@ -543,7 +508,6 @@
     },
     "serviceCertificationStatusOption": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -552,7 +516,6 @@
     },
     "serviceLocation": {
       "display_columns": [
-        "id",
         "name",
         "isActive"
       ],
@@ -562,7 +525,6 @@
     },
     "serviceQAAttachment": {
       "display_columns": [
-        "id",
         "description"
       ],
       "primary_label": [
@@ -571,7 +533,6 @@
     },
     "serviceQAAttachmentType": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -580,21 +541,18 @@
     },
     "serviceQuestion": {
       "display_columns": [
-        "id",
         "questionOptions"
       ],
       "primary_label": []
     },
     "serviceQuestionAnswerOption": {
       "display_columns": [
-        "id",
         "serviceQuestionOptionId"
       ],
       "primary_label": []
     },
     "serviceQuestionGroup": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -603,7 +561,6 @@
     },
     "serviceQuestionType": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -612,7 +569,6 @@
     },
     "serviceQuestionTypeOptionCategory": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -621,7 +577,6 @@
     },
     "serviceSection": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -630,7 +585,6 @@
     },
     "serviceTemplate": {
       "display_columns": [
-        "id",
         "name",
         "status"
       ],
@@ -640,7 +594,6 @@
     },
     "serviceTemplateWorkOrder": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -649,7 +602,6 @@
     },
     "setting": {
       "display_columns": [
-        "id",
         "name",
         "description",
         "status"
@@ -660,7 +612,6 @@
     },
     "smartReport": {
       "display_columns": [
-        "id",
         "name",
         "description"
       ],
@@ -670,14 +621,12 @@
     },
     "syncLog": {
       "display_columns": [
-        "id",
         "status"
       ],
       "primary_label": []
     },
     "user": {
       "display_columns": [
-        "id",
         "firstName",
         "lastName",
         "isNonBillable",
@@ -691,7 +640,6 @@
     },
     "userRole": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -700,7 +648,6 @@
     },
     "userRoleScope": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -718,7 +665,6 @@
     },
     "workOrderCategory": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -727,14 +673,12 @@
     },
     "workOrderCloseOut": {
       "display_columns": [
-        "id",
         "notSignatureReason"
       ],
       "primary_label": []
     },
     "workOrderStatus": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -743,7 +687,6 @@
     },
     "workTimeType": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -752,7 +695,6 @@
     },
     "workTimeTypeExceptionRule": {
       "display_columns": [
-        "id",
         "name"
       ],
       "primary_label": [
@@ -907,6 +849,51 @@
         "customerLocation.customerId = customer.id"
       ],
       "description": "Customer locations should show both customer and location names"
+    },
+    "crew_with_members": {
+      "tables": [
+        "crew",
+        "employeeCrew",
+        "employee",
+        "employeeRole"
+      ],
+      "display_override": {
+        "crew": [],
+        "employeeCrew": [
+          "isLead"
+        ],
+        "employee": [
+          "firstName",
+          "lastName"
+        ],
+        "employeeRole": [
+          "name"
+        ]
+      },
+      "required_joins": [
+        "crew.id = employeeCrew.crewId",
+        "employeeCrew.employeeId = employee.id",
+        "employeeCrew.employeeRoleId = employeeRole.id"
+      ],
+      "description": "When showing crew, always include employee names and roles via employeeCrew"
+    },
+    "equipment_with_names": {
+      "tables": [
+        "equipment",
+        "equipmentOption"
+      ],
+      "display_override": {
+        "equipment": [
+          "quantity"
+        ],
+        "equipmentOption": [
+          "name"
+        ]
+      },
+      "required_joins": [
+        "equipment.equipmentOptionId = equipmentOption.id"
+      ],
+      "description": "When showing equipment, always include equipmentOption.name for human-readable labels"
     }
   }
 }

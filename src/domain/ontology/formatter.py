@@ -124,6 +124,8 @@ def format_domain_context(resolutions: List[Dict[str, Any]]) -> str:
                     lines.append(f"  Calculation hint: {logic_hint}")
             if 'extraction_pattern' in hints:
                 lines.append(f"  Extraction pattern: {hints['extraction_pattern']}")
+            if 'display_hint' in hints:
+                lines.append(f"  Display hint: {hints['display_hint']}")
         
         lines.append(f"  Confidence: {res['confidence']} (strategy: {res['strategy']})")
     

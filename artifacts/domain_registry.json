@@ -286,6 +286,85 @@
         }
       }
     },
+    "service": {
+      "entity": "service_record",
+      "description": "Service records represent completed work. Service name comes from serviceTemplate via serviceTemplateWorkOrder. Services are linked to workOrder via serviceTemplateWorkOrder.",
+      "aliases": ["services", "service record", "service records"],
+      "resolution": {
+        "primary": {
+          "tables": ["service", "serviceTemplateWorkOrder", "serviceTemplate", "workOrder"],
+          "match_type": "structural",
+          "confidence": 1.0,
+          "anchor_table": "service",
+          "note": "Always include serviceTemplate for human-readable names and workOrder for work order context",
+          "required_joins": [
+            "service.serviceTemplateWorkOrderId = serviceTemplateWorkOrder.id",
+            "serviceTemplateWorkOrder.serviceTemplateId = serviceTemplate.id",
+            "serviceTemplateWorkOrder.workOrderId = workOrder.id"
+          ],
+          "display_hint": "SELECT serviceTemplate.name AS serviceName, service.date, service.status (do NOT select service.id)"
+        }
+      }
+    },
+    "crew": {
+      "entity": "crew_lead",
+      "description": "Crew refers to the crew lead (the employee who completed the service). Use service.completedByEmployeeCrewId to get the lead, not all crew members (which causes duplicate rows).",
+      "aliases": ["crews", "team", "workers", "crew lead"],
+      "requires_atomic_signals": ["service"],
+      "resolution": {
+        "primary": {
+          "tables": ["employeeCrew", "employee", "employeeRole"],
+          "match_type": "structural",
+          "confidence": 1.0,
+          "anchor_table": "service",
+          "note": "Show only the crew lead via service.completedByEmployeeCrewId to avoid duplicate rows. Only use when querying services with crew.",
+          "required_joins": [
+            "service.completedByEmployeeCrewId = employeeCrew.id",
+            "employeeCrew.employeeId = employee.id",
+            "employeeCrew.employeeRoleId = employeeRole.id"
+          ],
+          "display_hint": "SELECT employee.firstName, employee.lastName, employeeRole.name AS crewLeadRole (do NOT select employeeCrew.id or crew.id)"
+        }
+      }
+    },
+    "crew_members": {
+      "entity": "crew_all_members",
+      "description": "Crew members refers to ALL employees working on a crew. Use this when explicitly asked for all crew members or employees in a crew. This will return multiple rows per crew.",
+      "aliases": ["crew members", "all crew members", "employees in crew", "members of crew", "employees for crew", "all employees"],
+      "resolution": {
+        "primary": {
+          "tables": ["employeeCrew", "employee", "employeeRole"],
+          "match_type": "structural",
+          "confidence": 1.0,
+          "anchor_table": "employeeCrew",
+          "note": "Show all crew members via employeeCrew → employee. This returns multiple rows (one per crew member). Do NOT include service joins.",
+          "required_joins": [
+            "employeeCrew.employeeId = employee.id",
+            "employeeCrew.employeeRoleId = employeeRole.id"
+          ],
+          "display_hint": "SELECT employee.firstName, employee.lastName, employeeRole.name AS role, employeeCrew.isLead (do NOT select crew.id or employeeCrew.id)"
+        }
+      }
+    },
+    "equipment": {
+      "entity": "equipment_used",
+      "description": "Equipment refers to tools and machinery used on jobs via crewWorkDay. Always show equipment names from equipmentOption, not just IDs.",
+      "resolution": {
+        "primary": {
+          "tables": ["crewWorkDay", "equipment", "equipmentOption"],
+          "match_type": "structural",
+          "confidence": 1.0,
+          "anchor_table": "service",
+          "note": "Equipment is linked via crewWorkDay. Always include equipmentOption to show human-readable equipment names",
+          "required_joins": [
+            "service.crewWorkDayId = crewWorkDay.id",
+            "equipment.crewWorkDayId = crewWorkDay.id",
+            "equipment.equipmentOptionId = equipmentOption.id"
+          ],
+          "display_hint": "SELECT equipmentOption.name AS equipmentName, equipment.quantity (do NOT select equipment.id)"
+        }
+      }
+    },
     "payroll_rules": {
       "entity": "payroll_calculation",
       "description": "Business rules for calculating regular, overtime, and double time pay based on V1_RULES (base-api/packages/api-payroll/V1_RULES.md). Mon-Sat: first 8 hrs = regular, over 8 = overtime. Sunday: all hours = double time.",

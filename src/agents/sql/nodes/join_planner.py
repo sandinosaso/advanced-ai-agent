@@ -193,6 +193,43 @@ def plan_joins_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
                     path = f"{table} → {template_table}"
                 display_hints += f"  - {path}\n"
             display_hints += "IMPORTANT: Include these joins in your plan to show descriptive names.\n"
+    
+    # Inject required joins from domain terms
+    domain_required_joins = []
+    if ctx.domain_ontology and domain_resolutions:
+        for res in domain_resolutions:
+            required_joins = res.get("required_joins", [])
+            if required_joins:
+                for join_condition in required_joins:
+                    # Parse join condition to extract tables and columns
+                    # Format: "table1.col1 = table2.col2"
+                    domain_required_joins.append({
+                        "condition": join_condition,
+                        "term": res.get("term"),
+                        "note": f"Required by domain term '{res.get('term')}'"
+                    })
+                logger.info(
+                    f"Domain term '{res.get('term')}' requires {len(required_joins)} joins"
+                )
+    
+    if domain_required_joins:
+        state["domain_required_joins"] = domain_required_joins
+    
+    def _build_domain_joins_hint(joins_list):
+        """Build hint section for domain-required joins in join planner prompt"""
+        if not joins_list:
+            return ""
+        hint = "\n\n" + "=" * 70 + "\n"
+        hint += "DOMAIN-REQUIRED JOINS (MUST INCLUDE IN JOIN_PATH)\n"
+        hint += "=" * 70 + "\n"
+        hint += "The following joins are REQUIRED by domain concepts:\n\n"
+        for dj in joins_list:
+            hint += f"- JOIN: {dj['condition']} (N:1, 1.00)\n"
+            hint += f"  Reason: {dj['note']}\n"
+        hint += "\nThese joins are MANDATORY. You MUST include them in your JOIN_PATH.\n"
+        hint += "They ensure that human-readable names and domain-specific data are available.\n"
+        hint += "=" * 70 + "\n"
+        return hint
 
     selected_set = set(selected_tables)
     if ctx.domain_ontology and domain_resolutions:
@@ -249,6 +286,7 @@ Direct and transitive relationships available (for reference only - prefer sugge
 {anchor_instruction}
 {domain_filter_hints}
 {display_hints}
+{_build_domain_joins_hint(domain_required_joins)}
 {join_type_hints}
 {scoped_join_hints}
 Task:

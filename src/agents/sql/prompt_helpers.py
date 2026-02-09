@@ -437,20 +437,27 @@ def build_display_attributes_examples(
         if not display_manager.has_configuration(table):
             continue
         
-        display_cols = display_manager.get_display_columns(table, include_id=True)
+        display_cols = display_manager.get_display_columns(table, include_id=False)
         primary_label = display_manager.get_primary_label(table)
         template_rel = display_manager.get_template_relationship(table)
         
-        if not display_cols or len(display_cols) <= 1:
-            continue
-        
-        # Build example based on table configuration
-        if primary_label:
+        # Handle all tables, including those with 0-1 columns
+        if not display_cols:
+            # Table has no display columns (e.g. crew) - explicitly say don't show id/audit
+            examples.append(
+                f"- For {table} queries, do NOT select id or audit columns (createdBy, updatedBy, createdAt, updatedAt)"
+            )
+        elif len(display_cols) == 1:
+            # Table has 1 column (e.g. equipment with ["quantity"])
+            examples.append(
+                f"- For {table} queries, SELECT {display_cols[0]} (do NOT include id)"
+            )
+        elif primary_label:
             # Table has human-readable labels
             label_str = ", ".join(primary_label)
             examples.append(
                 f"- For {table} queries, SELECT {', '.join(display_cols[:4])} "
-                f"(always include {label_str} for readability, not just id)"
+                f"(always include {label_str}, do NOT include id unless configured)"
             )
         elif template_rel:
             # Table has template relationship
@@ -463,8 +470,8 @@ def build_display_attributes_examples(
         else:
             # Generic display columns
             examples.append(
-                f"- For {table} queries, prefer selecting {', '.join(display_cols[:4])} "
-                f"(human-readable columns, not just id)"
+                f"- For {table} queries, SELECT {', '.join(display_cols[:4])} "
+                f"(do NOT include id or audit columns)"
             )
         
         example_count += 1

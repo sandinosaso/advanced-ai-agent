@@ -46,6 +46,47 @@ def _extract_sql_from_markdown(text: str) -> str:
     return text
 
 
+def _extract_select_clause(sql: str) -> str:
+    """
+    Extract the SELECT clause (list of columns/expressions) from a SQL query.
+    Used to compare original vs corrected SQL and ensure SELECT wasn't changed.
+    """
+    if not sql or not sql.strip():
+        return ""
+    # Match SELECT ... up to the first FROM (word boundary)
+    match = re.search(r"\bSELECT\s+(.*?)\s+FROM\s+", sql, re.DOTALL | re.IGNORECASE)
+    if not match:
+        return ""
+    select_body = match.group(1).strip()
+    # Normalize whitespace for comparison
+    return " ".join(select_body.split())
+
+
+def _validate_correction_preserves_select(
+    original_sql: str, corrected_sql: str, error_message: str
+) -> bool:
+    """
+    Validate that correction doesn't change SELECT unless error was about SELECT.
+
+    Returns True if correction is valid, False if it improperly changed SELECT.
+    """
+    err_lower = error_message.lower()
+    # Allow SELECT to change only if the error is about the SELECT clause / field list
+    if "field list" in err_lower or "in 'select'" in err_lower:
+        return True
+    original_select = _extract_select_clause(original_sql)
+    corrected_select = _extract_select_clause(corrected_sql)
+    if original_select != corrected_select:
+        logger.warning(
+            "Correction changed SELECT clause but error was not about SELECT. "
+            "Original: %s... Corrected: %s...",
+            original_select[:100] if original_select else "(empty)",
+            corrected_select[:100] if corrected_select else "(empty)",
+        )
+        return False
+    return True
+
+
 def _build_alias_to_base_table_map(sql: str) -> dict:
     """
     Build a mapping from table aliases to their base table names.
@@ -299,6 +340,16 @@ EXAMPLE FIX:
     join_type_warning += "- LEFT JOINs are used for optional data (e.g., answers that may not exist)\n"
     join_type_warning += "- Only fix the join conditions/columns - keep the join type as-is\n"
 
+    preserve_structure = "\n\n⚠️ CRITICAL - PRESERVE ORIGINAL QUERY STRUCTURE:\n"
+    preserve_structure += "- DO NOT modify the SELECT clause columns unless the error is specifically about an invalid column in SELECT\n"
+    preserve_structure += "- DO NOT modify WHERE conditions unless the error is specifically about a missing table/column in WHERE\n"
+    preserve_structure += "- DO NOT change the list of tables or their order in FROM/JOIN\n"
+    preserve_structure += "- ONLY fix the specific error:\n"
+    preserve_structure += "  * If error is \"Unknown column 'X.Y' in 'where clause'\" and X is not in FROM/JOIN: add the missing JOIN for table X\n"
+    preserve_structure += "  * If error is \"Unknown table 'X'\": add the missing JOIN for table X\n"
+    preserve_structure += "  * If error is about a join condition: fix only that join's ON clause\n"
+    preserve_structure += "- Preserve all other aspects of the original query exactly as written\n"
+
     prompt = f"""You are a SQL correction agent. Fix this SQL error:
 
 ERROR: {error_message}
@@ -314,6 +365,7 @@ RELEVANT RELATIONSHIPS (only between tables in query):
 {history_text}
 {scoped_join_warning}
 {join_type_warning}
+{preserve_structure}
 
 INSTRUCTIONS:
 1. Analyze the error message carefully - each numbered error shows the wrong column and available columns
@@ -354,6 +406,11 @@ CORRECTED SQL QUERY:"""
             corrected_sql = corrected_sql[3:].strip()
 
         logger.info(f"Corrected SQL (attempt {correction_attempts + 1}): {corrected_sql[:200]}...")
+
+        if not _validate_correction_preserves_select(state["sql"], corrected_sql, error_message):
+            logger.warning(
+                "Correction agent changed SELECT clause; consider re-running with preserved SELECT."
+            )
 
         rewritten_sql = rewrite_secure_tables(corrected_sql)
 

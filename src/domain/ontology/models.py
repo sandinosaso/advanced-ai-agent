@@ -19,6 +19,7 @@ class DomainResolution:
     resolution_strategy: str  # "primary", "secondary", "fallback"
     hints: Optional[Dict[str, Any]] = None  # Optional hints for payroll logic, dynamic attributes, etc.
     extra: Optional[Dict[str, Any]] = None  # Term-specific attributes (e.g. regular_hours_threshold, rule_source)
+    required_joins: Optional[List[str]] = None  # Required join conditions for this domain term
 
 
 @dataclass

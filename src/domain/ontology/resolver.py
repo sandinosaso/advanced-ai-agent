@@ -179,11 +179,19 @@ class DomainTermResolver:
         extraction_pattern = strategy_config.get("extraction_pattern")
         if extraction_pattern:
             hints["extraction_pattern"] = extraction_pattern
+        
+        # Handle display_hint if present
+        display_hint = strategy_config.get("display_hint")
+        if display_hint:
+            hints["display_hint"] = display_hint
 
         # Merge strategy-level anchor_table into extra (for FROM clause selection)
         resolution_extra = dict(extra) if extra else {}
         if "anchor_table" in strategy_config:
             resolution_extra["anchor_table"] = strategy_config["anchor_table"]
+        
+        # Extract required joins if present
+        required_joins = strategy_config.get("required_joins")
 
         resolution = DomainResolution(
             term=term,
@@ -193,10 +201,11 @@ class DomainTermResolver:
             confidence=confidence,
             resolution_strategy=strategy_name,
             hints=hints if hints else None,
-            extra=resolution_extra if resolution_extra else None
+            extra=resolution_extra if resolution_extra else None,
+            required_joins=required_joins if required_joins else None
         )
         
-        logger.debug(f"Resolved '{term}' using {strategy_name} strategy: {len(tables)} tables, {len(filters)} filters, hints: {bool(hints)}")
+        logger.debug(f"Resolved '{term}' using {strategy_name} strategy: {len(tables)} tables, {len(filters)} filters, hints: {bool(hints)}, required_joins: {len(required_joins) if required_joins else 0}")
         
         return resolution
     
