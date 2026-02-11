@@ -59,7 +59,7 @@ Functions implemented:
 
 ### 5. Path Finder Enhancement ✅
 
-**Updated: `src/utils/path_finder.py`**
+**Updated: `src/sql/graph/path_finder.py`**
 
 - Extended `JoinPathFinder.__init__()` to accept `table_metadata` and `exclude_patterns`
 - Added `_should_exclude_table()` method
@@ -157,7 +157,7 @@ WHERE inspection.id = ?
 - `artifacts/domain_registry.json`
 - `src/agents/sql/planning/bridge_tables.py`
 - `src/agents/sql/planning/__init__.py`
-- `src/utils/path_finder.py`
+- `src/sql/graph/path_finder.py`
 - `src/agents/sql/nodes/join_planner.py`
 - `src/agents/sql/nodes/sql_generator.py`
 - `src/agents/sql/agent.py`

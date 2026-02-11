@@ -184,16 +184,17 @@ SELECT
 FROM newtable;
 ```
 
-### Step 2: Update SECURE_VIEW_MAP
+### Step 2: Configure base table list
 
-**File**: `src/config/constants.py`
+The secure view mapping is discovered from the database at runtime. Add the base table name to the `SECURE_BASE_TABLES` environment variable in `.env` (comma-separated). The system matches base tables to views whose names start with `secure_` (e.g. `newtable` → `secure_newtable`).
 
-```python
-SECURE_VIEW_MAP = {
-    # ... existing mappings ...
-    "newtable": "secure_newtable",  # Add here
-}
+**File**: `.env`
+
+```bash
+SECURE_BASE_TABLES=user,customer,employee,workOrder,newtable
 ```
+
+**Implementation**: `src/utils/sql/secure_views.py` (uses `get_secure_view_map()` after `initialize_secure_view_map()` at startup).
 
 ### Step 3: Rebuild Join Graph
 
@@ -281,7 +282,7 @@ Edit `artifacts/domain_registry.json` – no code changes needed. See [DOMAIN_ON
 
 1. Check join graph: `cat artifacts/join_graph_merged.json | grep "table_name"`
 2. Rebuild join graph if missing
-3. Check secure view mapping in `src/config/constants.py`
+3. Check secure view mapping: ensure base table is in `SECURE_BASE_TABLES` (`.env`) and the `secure_*` view exists in MySQL; see `src/utils/sql/secure_views.py`.
 
 #### Slow query performance
 
@@ -317,7 +318,7 @@ Edit `artifacts/domain_registry.json` – no code changes needed. See [DOMAIN_ON
 #### "secure_xyz doesn't exist"
 
 1. Verify view in MySQL: `SHOW TABLES LIKE 'secure_%';`
-2. Add mapping in `src/config/constants.py` (SECURE_VIEW_MAP)
+2. Add the base table to `SECURE_BASE_TABLES` in `.env` (see `src/utils/sql/secure_views.py`; mapping is discovered from the DB at startup)
 3. Rebuild join graph
 
 ### RAG Issues

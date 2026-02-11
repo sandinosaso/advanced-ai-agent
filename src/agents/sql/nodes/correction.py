@@ -153,7 +153,7 @@ def _build_alias_to_base_table_map(sql: str) -> dict:
 
 
 
-def correct_sql_node_legacy_2(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
+def correct_sql_node_llm_based(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     """
     LEGACY: Second correction agent with simplified prompt (no deterministic fixes).
     
@@ -456,8 +456,8 @@ def correct_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     # ========================================================================
     logger.info(f"Using LLM fallback for error type: {normalized.error_type.value}")
     
-    # Use the legacy_2 implementation for LLM-based correction
-    result_state = correct_sql_node_legacy_2(state, ctx)
+    # Use the correct_sql_node_llm_based implementation for LLM-based correction
+    result_state = correct_sql_node_llm_based(state, ctx)
     
     # Record metric based on whether the LLM fix succeeded
     llm_success = result_state.get("last_sql_error") is None

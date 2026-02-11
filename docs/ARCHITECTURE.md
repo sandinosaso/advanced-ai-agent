@@ -456,7 +456,7 @@ DOMAIN_REGISTRY_PATH=artifacts/domain_registry.json  # Registry location
 DOMAIN_EXTRACTION_ENABLED=true                        # Enable/disable extraction
 ```
 
-**Location**: `src/utils/config.py`
+**Location**: `src/config/settings.py`
 
 #### Example Queries
 
@@ -991,7 +991,7 @@ After correction, SQL automatically goes through validation again:
 
 ### Configuration
 
-**Location**: `src/utils/config.py`
+**Location**: `src/config/settings.py`
 
 ```python
 sql_correction_max_attempts: int = 3  # Max correction attempts
@@ -1050,22 +1050,18 @@ graph TB
 
 **Location**: `src/utils/sql/secure_views.py`
 
-```python
-SECURE_VIEW_MAP = {
-    "user": "secure_user",
-    "employee": "secure_employee",
-    "workOrder": "secure_workorder",
-    "customer": "secure_customer",
-    "customerLocation": "secure_customerlocation",
-    "customerContact": "secure_customercontact",
-}
+The secure view mapping is **discovered dynamically** from the database at runtime (not a static dict in code). Base tables that require secure views are configured via the `SECURE_BASE_TABLES` environment variable (comma-separated list). The module queries the database for views whose names start with `secure_` and matches them to base tables. Use `get_secure_view_map()` and `get_secure_views()` from this module; the map is initialized via `initialize_secure_view_map(db_connection)` at startup.
+
+**Example configuration** (`.env`):
+```bash
+SECURE_BASE_TABLES=user,customer,customerLocation,customerContact,employee,workOrder
 ```
 
 **Key Rules**:
-1. Only tables in `SECURE_VIEW_MAP` get `secure_*` variants
-2. LLM uses logical names (e.g., `employee`)
-3. System rewrites deterministically (`employee` → `secure_employee`)
-4. Validation prevents hallucinations before execution
+1. Only base tables listed in `SECURE_BASE_TABLES` get `secure_*` variants (views must exist in MySQL).
+2. LLM uses logical names (e.g., `employee`).
+3. System rewrites deterministically (`employee` → `secure_employee`) using the discovered map.
+4. Validation prevents hallucinations before execution.
 
 ### Rewriting Flow
 
@@ -1661,6 +1657,7 @@ The codebase is organized into a modular structure:
 **LLM** (`src/llm/`):
 - LLM client abstraction
 - Embedding service
+- Response utilities (`response_utils.py`) for multi-format model outputs (string vs structured content blocks with reasoning)
 
 **SQL Utilities** (`src/sql/`):
 - `execution/` - SQL execution and secure rewriting
