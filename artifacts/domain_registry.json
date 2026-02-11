@@ -383,6 +383,22 @@
         }
       }
     },
+    "include_internals": {
+      "entity": "filter_override",
+      "description": "User explicitly asks to include internal or hidden records. When present, do not apply default production-only filters (isInternal=0, isActive).",
+      "aliases": ["hidden", "even hidden", "include hidden", "include internals", "show hidden", "show internals", "internals as well", "including hidden", "including internals"],
+      "resolution": {
+        "primary": {
+          "match_type": "structural",
+          "tables": [],
+          "confidence": 1.0,
+          "note": "Signal only; do not apply default_table_filters when this term is present."
+        },
+        "extra": {
+          "skip_default_table_filters": true
+        }
+      }
+    },
     "payroll_rules": {
       "entity": "payroll_calculation",
       "description": "Business rules for calculating regular, overtime, and double time pay based on V1_RULES (base-api/packages/api-payroll/V1_RULES.md). Mon-Sat: first 8 hrs = regular, over 8 = overtime. Sunday: all hours = double time.",
