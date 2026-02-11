@@ -8,14 +8,14 @@ import functools
 import ast
 import re
 from pathlib import Path
-from typing import TypedDict, List, Dict, Any, Optional
+from typing import TypedDict, List, Dict, Any, Optional, Set
 
 from langgraph.graph import StateGraph, END
-from langchain_openai import ChatOpenAI
 
-from src.utils.config import settings
+from src.utils.config import settings, create_llm
 from src.utils.logger import logger
 from src.utils.path_finder import JoinPathFinder
+from src.utils.domain_ontology import DomainOntology, format_domain_context, format_domain_context_for_table_selection, build_where_clauses
 from src.tools.sql_tool import sql_tool
 from src.utils.sql.secure_views import (
     rewrite_secure_tables,
@@ -27,9 +27,36 @@ from src.utils.sql.secure_views import (
 _project_root = Path(__file__).parent.parent.parent
 JOIN_GRAPH_PATH = _project_root / "artifacts" / "join_graph_merged.json"
 
+# Audit columns to exclude from join planning
+# These columns are for tracking metadata, not for establishing semantic relationships
+AUDIT_COLUMNS = {'createdBy', 'updatedBy', 'createdAt', 'updatedAt'}
+
+
+def _entity_to_id_field(entity: str) -> Optional[str]:
+    """
+    Map referenced_entity (e.g. 'inspection', 'work order') to the standard id field name
+    (e.g. inspectionId, workOrderId) so the SQL generator can filter by the main table's PK.
+    """
+    if not entity or not isinstance(entity, str):
+        return None
+    s = entity.strip()
+    if not s:
+        return None
+    # Already camelCase with Id suffix (e.g. workOrder)
+    if s.endswith("Id"):
+        return s
+    # Split on spaces/caps and camelCase: "work order" -> workOrder, "inspection" -> inspection
+    parts = re.sub(r"([A-Z])", r" \1", s).split()
+    if not parts:
+        return None
+    camel = parts[0].lower() + "".join(p.title() for p in parts[1:])
+    return f"{camel}Id" if camel else None
+
 
 class SQLGraphState(TypedDict):
     question: str
+    domain_terms: List[str]  # Extracted business terms (e.g., ["crane", "action_item"])
+    domain_resolutions: List[Dict[str, Any]]  # Schema mappings for domain terms
     tables: List[str]
     allowed_relationships: List[Dict[str, Any]]
     join_plan: str
@@ -43,11 +70,57 @@ class SQLGraphState(TypedDict):
     last_sql_error: Optional[str]  # Store last SQL error message
     correction_history: Optional[List[Dict[str, Any]]]  # Track correction attempts
     validation_errors: Optional[List[str]]  # Pre-execution validation errors
+    # Follow-up question support
+    previous_results: Optional[List[Dict[str, Any]]]  # Last N query results from memory
+    is_followup: bool  # Flag indicating this is a follow-up question
+    referenced_ids: Optional[Dict[str, List]]  # IDs from previous results being referenced
 
 
 def load_join_graph() -> Dict[str, Any]:
+    """
+    Load the join graph and filter out audit column relationships.
+    
+    Audit columns (createdBy, updatedBy, createdAt, updatedAt) are metadata fields
+    for tracking changes, not semantic business relationships. They should not be
+    used for determining join paths.
+    
+    Normalizes relationship table names to the canonical keys from graph["tables"]
+    so that mixed casing (e.g. InspectionQuestion vs inspectionQuestion) does not
+    create duplicate nodes or wrong bridge table counts.
+    """
     with open(str(JOIN_GRAPH_PATH), "r", encoding="utf-8") as f:
-        return json.load(f)
+        graph = json.load(f)
+    
+    # Canonical table names: map lowercased name -> key from graph["tables"]
+    table_keys = list(graph["tables"].keys())
+    canonical_by_lower = {t.lower(): t for t in table_keys}
+
+    def canonical_table(name: str) -> str:
+        if not name:
+            return name
+        return canonical_by_lower.get(name.lower(), name)
+
+    # Filter out audit column relationships
+    original_count = len(graph["relationships"])
+    filtered_rels = [
+        r for r in graph["relationships"]
+        if r["from_column"] not in AUDIT_COLUMNS
+    ]
+    # Normalize from_table / to_table to canonical keys so path finder and bridge logic see one node per table
+    graph["relationships"] = []
+    for r in filtered_rels:
+        r = dict(r)
+        r["from_table"] = canonical_table(r.get("from_table", ""))
+        r["to_table"] = canonical_table(r.get("to_table", ""))
+        graph["relationships"].append(r)
+    filtered_count = original_count - len(graph["relationships"])
+
+    logger.info(
+        f"Loaded join graph: {len(graph['tables'])} tables, {len(graph['relationships'])} relationships "
+        f"(filtered {filtered_count} audit column relationships)"
+    )
+
+    return graph
 
 
 def trace_step(step_name):
@@ -104,23 +177,252 @@ class SQLGraphAgent:
     """
 
     def __init__(self):
-        self.llm = ChatOpenAI(
-            model=settings.openai_model,
+        self.llm = create_llm(
             temperature=0,
             max_completion_tokens=settings.max_output_tokens,
         )
+        # Load join graph (audit columns are filtered during load)
         self.join_graph = load_join_graph()
         
         # Initialize path finder for efficient transitive join path discovery
+        # Note: join_graph relationships are already filtered (no audit columns)
         self.path_finder = JoinPathFinder(
             self.join_graph["relationships"],
             confidence_threshold=settings.sql_confidence_threshold
         )
         
+        # Initialize domain ontology for business concept resolution
+        if settings.domain_registry_enabled:
+            try:
+                self.domain_ontology = DomainOntology()
+                logger.info("Domain ontology initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize domain ontology: {e}. Proceeding without domain resolution.")
+                self.domain_ontology = None
+        else:
+            self.domain_ontology = None
+            logger.info("Domain ontology disabled")
+        
         self.workflow = self._build()
 
         logger.info("SQLGraphAgent initialized with path finder")
 
+    # 0a) Follow-up Question Detection
+    @trace_step('detect_followup')
+    def _detect_followup_question(self, state: SQLGraphState) -> SQLGraphState:
+        """
+        Detect if the question is a follow-up referencing previous results.
+        
+        Uses LLM to classify if the question references previous query results
+        and extracts what entities/IDs are being referenced.
+        
+        Example:
+            Previous: "Find crane inspections for ABC COKE"
+            Current: "Show me the questions for that inspection"
+            → is_followup=True, referenced_ids extracted
+        """
+        logger.info(f"In node follow-up question settings.followup_detection_enabled: {settings.followup_detection_enabled}")
+        if not settings.followup_detection_enabled:
+            state['is_followup'] = False
+            state['referenced_ids'] = None
+            return state
+        
+        # Check if we have previous results
+        previous_results = state.get('previous_results')
+        logger.info(f"In node follow-up question I have previous results: {previous_results}")
+        if not previous_results:
+            state['is_followup'] = False
+            state['referenced_ids'] = None
+            return state
+        
+        question = state['question']
+        
+        # Import QueryResultMemory to format context
+        from src.utils.query_memory import QueryResultMemory
+        
+        # Create temporary memory from previous results
+        temp_memory = QueryResultMemory.from_dict(
+            previous_results,
+            max_results=settings.query_result_memory_size
+        )
+
+        logger.info(f"In node follow-up question I have temp_memory: {temp_memory}")
+        
+        # Format previous results for context
+        context = temp_memory.format_for_context(
+            n=3,
+            max_tokens=settings.followup_max_context_tokens,
+            include_sample_rows=True
+        )
+
+        logger.info(f"In node follow-up question I have context: {context}")
+        
+        if not context:
+            state['is_followup'] = False
+            state['referenced_ids'] = None
+            return state
+        
+        # LLM prompt to detect follow-up
+        prompt = f"""Analyze if this question is a follow-up referencing previous query results.
+
+{context}
+
+CURRENT QUESTION: {question}
+
+TASK:
+Determine if the current question references the previous results above.
+
+Look for:
+- Reference words: "that", "those", "the same", "previous", "from above", "for it", "for them"
+- Implicit references: "show me the questions" (implies "for that inspection")
+- Context-dependent questions that don't make sense without previous results
+
+Respond with ONLY a JSON object (no markdown, no explanation):
+{{
+  "is_followup": true/false,
+  "reasoning": "brief explanation",
+  "referenced_entity": "inspection/workOrder/employee/etc or null",
+  "referenced_ids": {{"inspectionId": ["<field name from Key IDs above>"], ...}} or null
+}}
+
+If is_followup=true: set referenced_ids to the KEY NAMES only (e.g. inspectionId, workOrderId) that match the entity being referenced. Use the exact key names from "Key IDs found" above - the system will substitute the actual ID values automatically. Do NOT invent placeholder values like id1 or [SPECIFIC_INSPECTION_ID].
+If is_followup=false, set referenced_entity and referenced_ids to null.
+"""
+        
+        try:
+            response = self.llm.invoke(prompt)
+            raw = str(response.content).strip() if hasattr(response, 'content') and response.content else ""
+            
+            # Clean up markdown code blocks if present
+            if raw.startswith("```"):
+                lines = raw.split("\n")
+                # Remove first and last lines (```json and ```)
+                raw = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
+            
+            # Parse JSON response
+            result = json.loads(raw)
+            
+            is_followup = result.get("is_followup", False)
+            referenced_ids = result.get("referenced_ids")
+            referenced_entity = result.get("referenced_entity")
+            reasoning = result.get("reasoning", "")
+            
+            # CRITICAL: Never use LLM-provided ID values - they may be placeholders like
+            # "id1", "[SPECIFIC_INSPECTION_ID]", etc. Always use actual IDs from memory.
+            if is_followup:
+                actual_ids = temp_memory.get_all_identifiers(n=1)
+                if actual_ids:
+                    if referenced_ids and isinstance(referenced_ids, dict):
+                        # Use LLM keys (which entity/field is referenced) but real values from memory
+                        merged = {
+                            k: actual_ids[k] for k in referenced_ids
+                            if k in actual_ids and actual_ids[k]
+                        }
+                        referenced_ids = merged if merged else actual_ids
+                    else:
+                        referenced_ids = actual_ids
+                    # When the question references a main entity (e.g. "that inspection"), ensure we
+                    # add that entity's PK. Previous result stores it as "id"; map entity -> entityId.
+                    if referenced_entity and "id" in actual_ids and actual_ids["id"]:
+                        id_field_for_entity = _entity_to_id_field(referenced_entity)
+                        if id_field_for_entity and (not referenced_ids or id_field_for_entity not in referenced_ids):
+                            referenced_ids = dict(referenced_ids) if referenced_ids else {}
+                            referenced_ids[id_field_for_entity] = actual_ids["id"]
+                else:
+                    referenced_ids = None
+            
+            state['is_followup'] = is_followup
+            state['referenced_ids'] = referenced_ids if is_followup else None
+            
+            if is_followup:
+                logger.info(
+                    f"✅ Detected follow-up question: entity={referenced_entity}, "
+                    f"IDs={referenced_ids}, reasoning={reasoning}"
+                )
+            else:
+                logger.info(f"Not a follow-up question: {reasoning}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to detect follow-up question: {e}. Treating as new question.")
+            state['is_followup'] = False
+            state['referenced_ids'] = None
+        
+        return state
+    
+    # 0) Domain Term Extraction
+    @trace_step('extract_domain_terms')
+    def _extract_domain_terms(self, state: SQLGraphState) -> SQLGraphState:
+        """
+        Extract domain-specific business terms from the question.
+        
+        Example:
+            "Find work orders with crane inspections that have action items"
+            → domain_terms: ["crane", "action_item"]
+        """
+        if not self.domain_ontology or not settings.domain_extraction_enabled:
+            state['domain_terms'] = []
+            state['domain_resolutions'] = []
+            return state
+        
+        question = state['question']
+        
+        try:
+            domain_terms = self.domain_ontology.extract_domain_terms(question)
+            state['domain_terms'] = domain_terms
+            state['domain_resolutions'] = []  # Will be filled in next step
+            
+            logger.info(f"Extracted {len(domain_terms)} domain terms: {domain_terms}")
+        except Exception as e:
+            logger.error(f"Failed to extract domain terms: {e}")
+            state['domain_terms'] = []
+            state['domain_resolutions'] = []
+        
+        return state
+    
+    # 0b) Domain Term Resolution
+    @trace_step('resolve_domain_terms')
+    def _resolve_domain_terms(self, state: SQLGraphState) -> SQLGraphState:
+        """
+        Resolve domain terms to schema locations.
+        
+        Maps business concepts to:
+        - Primary tables (assetType for "crane")
+        - Filter conditions (isActionItem=true for "action item")
+        - Bridge tables needed (dynamicAttribute, dynamicAttributeValue)
+        """
+        if not self.domain_ontology:
+            return state
+        
+        domain_terms = state.get('domain_terms', [])
+        resolutions = []
+        
+        for term in domain_terms:
+            try:
+                resolution = self.domain_ontology.resolve_domain_term(term)
+                if resolution:
+                    resolutions.append({
+                        'term': resolution.term,
+                        'entity': resolution.entity,
+                        'tables': resolution.tables,
+                        'filters': resolution.filters,
+                        'confidence': resolution.confidence,
+                        'strategy': resolution.resolution_strategy
+                    })
+            except Exception as e:
+                logger.error(f"Failed to resolve domain term '{term}': {e}")
+        
+        state['domain_resolutions'] = resolutions
+        
+        # Log domain understanding
+        if resolutions:
+            logger.info(f"Resolved {len(resolutions)} domain terms to schema:")
+            for res in resolutions:
+                logger.info(f"  - '{res['term']}' → tables: {res['tables']}, filters: {len(res['filters'])}")
+        else:
+            logger.debug("No domain terms resolved")
+        
+        return state
+    
     # 1) Table Selector
     @trace_step('select_tables')
     def _select_tables(self, state: SQLGraphState) -> SQLGraphState:
@@ -131,8 +433,69 @@ class SQLGraphAgent:
         - Join graph contains real tables (both base tables and secure views)
         - We select based on what exists, not what we want to rewrite
         - Rewriting happens later in SQL generation
+        - Domain resolutions automatically add required tables
+        - For follow-up questions, uses previous query context
         """
         all_tables = list(self.join_graph["tables"].keys())
+        
+        # Build follow-up context if this is a follow-up question
+        followup_context = ""
+        if state.get('is_followup') and state.get('previous_results'):
+            from src.utils.query_memory import QueryResultMemory
+            
+            # Create temporary memory from previous results
+            temp_memory = QueryResultMemory.from_dict(
+                state['previous_results'],
+                max_results=settings.query_result_memory_size
+            )
+            
+            # Get the most recent result
+            recent = temp_memory.get_recent_results(n=1)
+            if recent:
+                last_result = recent[0]
+                referenced_ids = state.get('referenced_ids', {})
+                
+                followup_context = f"""
+FOLLOW-UP QUESTION CONTEXT:
+This is a follow-up to a previous query. Use the context below to guide your table selection.
+
+Previous Question: {last_result.question}
+Tables Used Previously: {', '.join(last_result.tables_used) if last_result.tables_used else 'N/A'}
+Rows Returned: {last_result.row_count}
+
+Key IDs Available (you can use these directly in WHERE clauses):
+"""
+                if referenced_ids:
+                    for id_field, values in referenced_ids.items():
+                        display_values = values[:5]
+                        more = f" (and {len(values) - 5} more)" if len(values) > 5 else ""
+                        followup_context += f"  - {id_field}: {display_values}{more}\n"
+                else:
+                    followup_context += "  (No specific IDs extracted - use tables from previous query)\n"
+                
+                followup_context += f"""
+INSTRUCTIONS FOR FOLLOW-UP:
+- You already have the IDs above - use them directly in your WHERE clause
+- Select tables needed to answer the NEW information requested
+- You may need to include some tables from the previous query to join with the IDs
+- Don't rebuild the entire previous query - we already have the target IDs
+"""
+        
+        # Build domain context if available (lightweight version for table selection)
+        domain_context = ""
+        domain_required_tables = set()
+        
+        domain_resolutions = state.get('domain_resolutions', [])
+        if domain_resolutions:
+            domain_context = "\n" + format_domain_context_for_table_selection(domain_resolutions) + "\n"
+            
+            # Collect tables required by domain resolutions
+            for res in domain_resolutions:
+                domain_required_tables.update(res.get('tables', []))
+            
+            if domain_required_tables:
+                domain_context += f"\nIMPORTANT: Domain concepts require these tables: {', '.join(sorted(domain_required_tables))}\n"
+                domain_context += "You MUST include these tables in your selection.\n"
 
         prompt = f"""
 Select the set of tables needed to answer the question.
@@ -142,7 +505,9 @@ Rules:
 - Select from ACTUAL available tables (join graph reflects reality)
 - If unsure, return fewer tables
 - DO NOT invent table names that don't exist
-
+- Prefer always to show labels/name or any column with text instead of IDS use IDS just for joining tables/ grouping but not to show in the result unless explicitly asked for
+  (make sure to include the table that has those names)
+{followup_context}{domain_context}
 Available tables (subset shown if large):
 {', '.join(all_tables[:settings.sql_max_tables_in_selection_prompt])}
 
@@ -157,6 +522,12 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
         try:
             tables = json.loads(raw)
             tables = [t for t in tables if t in self.join_graph["tables"]]
+            
+            # Ensure domain-required tables are included
+            for table in domain_required_tables:
+                if table in self.join_graph["tables"] and table not in tables:
+                    tables.append(table)
+                    logger.info(f"Added domain-required table: {table}")
         except Exception as e:
             logger.warning(f"Failed to parse table selection: {e}. Raw output: {raw}")
             # Fallback: use safe defaults based on question
@@ -187,15 +558,17 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
         1. Finds direct relationships between selected tables
         2. Uses path finder to discover transitive paths (multi-hop joins)
         3. Expands allowed relationships to include both direct and transitive paths
+        
+        Note: Audit columns (createdBy, updatedBy, etc.) are filtered when loading the join graph.
         """
+        # Relationships are already filtered (audit columns removed during load)
         rels = self.join_graph["relationships"]
         selected = set(state["tables"])
+        confidence_threshold = settings.sql_confidence_threshold
 
         # Keep direct relationships:
         # - edges where both endpoints are in selected tables
         # - confidence threshold (configurable via settings.sql_confidence_threshold)
-        confidence_threshold = settings.sql_confidence_threshold
-
         direct_relationships = [
             r for r in rels
             if r["from_table"] in selected
@@ -209,6 +582,7 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
 
         # Expand with transitive paths using path finder
         # This finds shortest paths between tables that aren't directly connected
+        # Path finder was initialized with filtered relationships (no audit columns)
         expanded_relationships = self.path_finder.expand_relationships(
             tables=list(selected),
             direct_relationships=direct_relationships,
@@ -220,13 +594,39 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
             f"(added {len(expanded_relationships) - len(direct_relationships)} transitive paths)"
         )
         
-        # Automatically add bridge tables that connect two selected tables with high confidence
-        # This ensures we include tables like employeeCrew when both crew and employee are selected
-        bridge_tables = self._find_bridge_tables(selected, rels, confidence_threshold=0.9)
+        # Automatically add bridge tables that connect selected tables (use same confidence as pipeline)
+        # Filter by relevance: only keep bridges on shortest paths or domain-preferred (e.g. inspectionQuestionGroup for inspection_questions).
+        candidate_bridges = self._find_bridge_tables(selected, rels, confidence_threshold=confidence_threshold)
+        on_path = self._get_bridges_on_paths(selected)
+        domain_bridges = self._get_domain_bridges(state.get("domain_resolutions", []))
+        relevant = on_path | (domain_bridges & candidate_bridges)
+        # Apply domain exclude_bridge_patterns: drop bridges whose name contains any pattern (case-insensitive)
+        exclude_patterns = self._get_exclude_bridge_patterns(state.get("domain_resolutions", []))
+        if exclude_patterns:
+            relevant = {t for t in relevant if not any(p.lower() in t.lower() for p in exclude_patterns)}
+        if relevant:
+            bridge_tables = relevant
+        elif candidate_bridges:
+            bridge_tables = candidate_bridges
+        else:
+            bridge_tables = set()
         if bridge_tables:
             logger.info(f"Auto-adding {len(bridge_tables)} bridge tables: {bridge_tables}")
             selected.update(bridge_tables)
-            state["tables"] = list(selected)  # Update state with bridge tables
+            state["tables"] = list(selected)
+
+        # Domain exclude_columns: remove relationships that use forbidden columns (e.g. asset.customerLocationId)
+        excluded_columns = self._get_excluded_columns(state.get("domain_resolutions", []))
+        if excluded_columns:
+            before = len(expanded_relationships)
+            expanded_relationships = [
+                r for r in expanded_relationships
+                if r.get("from_column") not in excluded_columns.get(r.get("from_table"), set())
+                and r.get("to_column") not in excluded_columns.get(r.get("to_table"), set())
+            ]
+            if len(expanded_relationships) < before:
+                logger.info(f"Filtered {before - len(expanded_relationships)} relationships using domain exclude_columns")
+        state["allowed_relationships"] = expanded_relationships
 
         # Log some example paths for debugging
         if len(expanded_relationships) > len(direct_relationships):
@@ -243,7 +643,6 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
                     continue
                 break
 
-        state["allowed_relationships"] = expanded_relationships
         return state
 
     # 3) Join Planner (correctness anchor)
@@ -259,12 +658,19 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
         allowed_rels = state['allowed_relationships']
         
         # Use path finder to suggest optimal paths between selected tables
-        # This provides concrete paths that the LLM can validate
+        # Skip paths that use domain exclude_columns (e.g. asset.customerLocationId)
+        excluded_columns = self._get_excluded_columns(state.get("domain_resolutions", []))
         suggested_paths = []
         for i, table1 in enumerate(selected_tables):
             for table2 in selected_tables[i+1:]:
                 path = self.path_finder.find_shortest_path(table1, table2, max_hops=4)
                 if path:
+                    if excluded_columns and any(
+                        rel.get("from_column") in excluded_columns.get(rel.get("from_table"), set())
+                        or rel.get("to_column") in excluded_columns.get(rel.get("to_table"), set())
+                        for rel in path
+                    ):
+                        continue
                     path_desc = self.path_finder.get_path_description(path)
                     # Extract all tables in the path (including bridge tables)
                     tables_in_path = set()
@@ -329,6 +735,31 @@ To connect crew to employee, use this EXACT path from the suggestions above:
 {"=" * 70}
 """
         
+        # Build domain filter hints
+        domain_filter_hints = ""
+        domain_resolutions = state.get('domain_resolutions', [])
+        if domain_resolutions:
+            domain_filter_hints = "\n" + format_domain_context(domain_resolutions) + "\n"
+            domain_filter_hints += "IMPORTANT: Plan joins to include tables needed for domain filters.\n"
+            domain_filter_hints += "The WHERE clause will filter based on these domain concepts.\n"
+
+        # When a term has anchor_table and ordered tables, prefer that join chain (e.g. inspection → template → section → group → question → answer)
+        selected_set = set(selected_tables)
+        if self.domain_ontology and domain_resolutions:
+            terms_registry = self.domain_ontology.registry.get("terms", {})
+            for res in domain_resolutions:
+                term = res.get("term")
+                if not term or term not in terms_registry:
+                    continue
+                primary = terms_registry[term].get("resolution", {}).get("primary", {})
+                anchor = primary.get("anchor_table")
+                chain_tables = primary.get("tables", [])
+                if anchor and len(chain_tables) >= 2 and set(chain_tables).issubset(selected_set):
+                    chain_str = " → ".join(chain_tables)
+                    domain_filter_hints += f"\nPREFERRED JOIN CHAIN for this domain (use in JOIN_PATH, in order): {chain_str}\n"
+                    domain_filter_hints += "Include all tables in this chain; do not skip to a shorter path.\n"
+                    break  # one chain hint per request
+        
         prompt = f"""
 You are planning SQL joins. You MUST ONLY use the allowed relationships.
 
@@ -347,12 +778,13 @@ These paths are computed by the graph algorithm and include ALL bridge tables ne
 
 Direct and transitive relationships available (for reference only - prefer suggested paths):
 {json.dumps(rels_display[:settings.sql_max_relationships_in_prompt], indent=2)}  # Limited to avoid confusion
-
+{domain_filter_hints}
 Task:
 - PRIMARY: Use the suggested paths above - they are computed by the graph algorithm and are correct
+- If a PREFERRED JOIN CHAIN is stated above for this domain, USE THAT CHAIN in order (do not use a shorter path that skips tables in the chain)
 - If a suggested path exists for the tables you need to connect, USE IT EXACTLY as shown
 - Only construct your own path if no suggested path exists
-- Prefer shorter paths (fewer hops) when multiple options exist
+- Prefer shorter paths (fewer hops) when multiple options exist, unless a PREFERRED JOIN CHAIN is given
 - Use cardinality to prefer safer joins (N:1 / 1:1 over N:N)
 - CRITICAL: If connecting two tables requires a bridge table (like 'user' connecting 'crew' to 'employee'), 
   you MUST include ALL intermediate tables in the JOIN_PATH. Do NOT skip bridge tables.
@@ -370,7 +802,7 @@ NOTES:
 - brief reasoning about path choice
 - explicitly state if using bridge tables and why
 """
-        logger.info(f"[PROMPT] plan_joins prompt:\n{prompt}")
+        logger.debug(f"[PROMPT] plan_joins prompt:\n{prompt}")
         response = self.llm.invoke(prompt)
         state["join_plan"] = str(response.content) if hasattr(response, 'content') and response.content else ""
         return state
@@ -398,11 +830,17 @@ NOTES:
         all_tables = set(state["tables"]) | tables_from_join_plan
         
         # Build table schemas for ALL tables (selected + bridge) with their actual columns
-        # This ensures the LLM knows exactly what columns are available in each table
+        # Domain exclude_columns: omit forbidden columns so the LLM cannot use them
+        excluded_columns = self._get_excluded_columns(state.get("domain_resolutions", []))
         table_schemas = []
+        forbidden_columns_flat: List[str] = []
         for table_name in sorted(all_tables):
             if table_name in self.join_graph["tables"]:
                 columns = self.join_graph["tables"][table_name].get("columns", [])
+                excluded = excluded_columns.get(table_name, set())
+                columns = [c for c in columns if c not in excluded]
+                if excluded:
+                    forbidden_columns_flat.extend(f"{table_name}.{c}" for c in excluded)
                 # Show columns up to configured limit so LLM has complete information
                 columns_str = ', '.join(columns[:settings.sql_max_columns_in_schema])
                 if len(columns) > settings.sql_max_columns_in_schema:
@@ -413,16 +851,79 @@ NOTES:
                 logger.warning(f"Table '{table_name}' mentioned in join plan but not found in join graph")
         
         schema_context = "\n".join(table_schemas)
+        excluded_columns_hint = ""
+        if forbidden_columns_flat:
+            excluded_columns_hint = "\n\nDo NOT use these columns (forbidden for this query): " + ", ".join(forbidden_columns_flat) + "\n"
 
         # Parse JOIN_PATH to extract explicit join steps
         join_path_steps = self._parse_join_path_steps(state.get('join_plan', ''))
+        
+        # Build follow-up context with known IDs
+        followup_where_clause = ""
+        if state.get('is_followup') and state.get('referenced_ids'):
+            referenced_ids = state['referenced_ids']
+            followup_where_clause = "\n\nFOLLOW-UP QUERY - USE THESE KNOWN IDs:\n"
+            followup_where_clause += "=" * 70 + "\n"
+            followup_where_clause += "This is a follow-up question. You have these IDs from the previous query:\n\n"
+            
+            # Skip placeholder-like values (LLM may have returned [SPECIFIC_INSPECTION_ID], id1, etc.)
+            def _is_real_id(v: Any) -> bool:
+                s = str(v).strip()
+                if not s or s.startswith("[") or s.endswith("]") or "SPECIFIC_" in s.upper():
+                    return False
+                if s.lower() in ("id1", "id2", "id3", "id"):
+                    return False
+                return True
+
+            where_conditions = []
+            for id_field, values in referenced_ids.items():
+                real_values = [v for v in values if _is_real_id(v)][:10]
+                if not real_values:
+                    continue
+                # Determine which table this ID belongs to
+                # Try to infer table from ID field name (e.g., inspectionId -> inspection table)
+                table_name = id_field.replace('Id', '').replace('id', '')
+                if not table_name:  # e.g. id_field "id" -> empty; skip or infer from context
+                    continue
+                # Most tables use PK column "id"; when id_field is entityId (e.g. inspectionId),
+                # the column on that table is "id", not "inspectionId"
+                column_name = (
+                    "id"
+                    if (
+                        id_field.endswith("Id")
+                        and id_field != "id"
+                        and table_name
+                        and id_field == table_name + "Id"
+                    )
+                    else id_field
+                )
+                # Check if this table is in our selected tables
+                if table_name in all_tables or any(table_name.lower() == t.lower() for t in all_tables):
+                    if len(real_values) == 1:
+                        where_conditions.append(f"{table_name}.{column_name} = '{real_values[0]}'")
+                    else:
+                        # Multiple IDs - use IN clause
+                        values_str = "', '".join(str(v) for v in real_values)
+                        where_conditions.append(f"{table_name}.{column_name} IN ('{values_str}')")
+            
+            if where_conditions:
+                followup_where_clause += "CRITICAL - Include these WHERE conditions to filter by the referenced IDs:\n"
+                for condition in where_conditions:
+                    followup_where_clause += f"  - {condition}\n"
+                followup_where_clause += "\n"
+                followup_where_clause += "IMPORTANT:\n"
+                followup_where_clause += "- Use these exact IDs in your WHERE clause (copy the values above literally)\n"
+                followup_where_clause += "- Do NOT use placeholders like [SPECIFIC_INSPECTION_ID], [ID], or id1/id2\n"
+                followup_where_clause += "- Do NOT rebuild the filter from the previous query\n"
+                followup_where_clause += "- Focus on selecting the NEW data requested in the current question\n"
+                followup_where_clause += "=" * 70 + "\n"
         
         prompt = f"""
 Generate a MySQL SELECT query using ONLY the columns shown below.
 
 All tables needed for this query (with their actual columns):
 {schema_context}
-
+{excluded_columns_hint}
 CRITICAL RULES:
 - Use ONLY the columns listed above for each table - do NOT guess or invent column names
 - Follow the JOIN_PATH EXACTLY step by step - do NOT skip any tables or steps
@@ -433,6 +934,14 @@ CRITICAL RULES:
 - Use logical table names (workOrder not secure_workorder)
 - DO NOT add secure_ prefix - the system handles that automatically
 
+IMPORTANT FOR NAME/LABEL REQUESTS:
+- If the question asks for "names" or "labels" instead of IDs, select the appropriate name/label columns:
+  * serviceLocation: use "name" column for location name
+  * employee: use "firstName" and "lastName" for employee name (can use CONCAT(firstName, ' ', lastName) AS employeeName)
+  * customer: use "name" column for customer name
+  * crew: use "name" column for crew name
+- When replacing an ID with a name, make sure to SELECT the name column(s) and JOIN to the table that has the name
+{followup_where_clause}
 Question: {state['question']}
 
 Join plan (follow this EXACTLY, step by step):
@@ -442,20 +951,155 @@ Join plan (follow this EXACTLY, step by step):
 
 IMPORTANT: If JOIN_PATH shows multiple steps (e.g., crew.createdBy = user.id, then user.employeeId = employee.id), 
 you MUST include BOTH joins in your SQL. Do NOT skip the bridge table (user) and try to join crew directly to employee.
-
+{self._build_domain_filter_instructions(state)}
 Return ONLY the SQL query, nothing else.
 """
-        logger.info(f"[PROMPT] generate_sql prompt:\n{prompt}")
+        logger.debug(f"[PROMPT] generate_sql prompt:\n{prompt}")
         response = self.llm.invoke(prompt)
         raw_sql = str(response.content).strip() if hasattr(response, 'content') and response.content else ""
         if raw_sql.startswith("```"):
             lines = raw_sql.split("\n")
             raw_sql = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
         logger.info(f"Generated SQL (before rewriting): {raw_sql}")
+        
+        # Inject domain filter WHERE clauses if needed
+        domain_resolutions = state.get('domain_resolutions', [])
+        if domain_resolutions:
+            raw_sql = self._inject_domain_filters(raw_sql, domain_resolutions)
+            logger.info(f"Injected domain filters into SQL")
+        
+        # Remove duplicate JOINs (safety net for LLM errors)
+        raw_sql = self._deduplicate_joins(raw_sql)
+        
         rewritten_sql = rewrite_secure_tables(raw_sql)
         logger.info(f"Rewritten SQL (after secure view conversion): {rewritten_sql}")
         state["sql"] = rewritten_sql
         return state
+    
+    def _build_domain_filter_instructions(self, state: SQLGraphState) -> str:
+        """Build instructions for domain filters in SQL generation prompt"""
+        domain_resolutions = state.get('domain_resolutions', [])
+        if not domain_resolutions:
+            return ""
+        
+        where_clauses = build_where_clauses(domain_resolutions)
+        if not where_clauses:
+            return ""
+        
+        instructions = f"\n\nDOMAIN FILTER REQUIREMENTS:\n"
+        instructions += "You MUST include these WHERE clause conditions to filter by domain concepts:\n"
+        for clause in where_clauses:
+            instructions += f"  - {clause}\n"
+        instructions += "\nCombine these with AND in your WHERE clause.\n"
+        
+        return instructions
+    
+    def _deduplicate_joins(self, sql: str) -> str:
+        """
+        Remove duplicate JOIN clauses from SQL.
+        
+        Safety net for LLM errors that create duplicate joins.
+        Detects both:
+        1. Exact duplicate JOIN lines
+        2. Same table joined multiple times (even with different conditions)
+        """
+        lines = sql.split('\n')
+        seen_joins = set()  # For exact duplicates
+        seen_tables = set()  # For duplicate table joins
+        deduplicated_lines = []
+        
+        for line in lines:
+            # Normalize JOIN line for comparison (remove extra spaces)
+            normalized = ' '.join(line.strip().split())
+            normalized_upper = normalized.upper()
+            
+            # Check if this is a JOIN line
+            if normalized_upper.startswith('JOIN '):
+                # Extract table name from JOIN clause
+                # Format: "JOIN table_name ON ..." or "JOIN table_name alias ON ..."
+                parts = normalized.split()
+                if len(parts) >= 2:
+                    table_name = parts[1].lower()  # Get table name after JOIN keyword
+                    
+                    # Check for exact duplicate
+                    if normalized in seen_joins:
+                        logger.warning(f"Removed exact duplicate JOIN: {normalized}")
+                        continue
+                    
+                    # Check for duplicate table (same table joined twice with different conditions)
+                    if table_name in seen_tables:
+                        logger.warning(f"Removed duplicate table JOIN: {table_name} (already joined)")
+                        continue
+                    
+                    seen_joins.add(normalized)
+                    seen_tables.add(table_name)
+                    deduplicated_lines.append(line)
+                else:
+                    # Malformed JOIN, keep it (will fail validation)
+                    deduplicated_lines.append(line)
+            else:
+                deduplicated_lines.append(line)
+        
+        return '\n'.join(deduplicated_lines)
+    
+    def _inject_domain_filters(self, sql: str, domain_resolutions: List[Dict[str, Any]]) -> str:
+        """
+        Inject domain filter WHERE clauses into generated SQL.
+        
+        This is a safety net in case the LLM doesn't include the filters.
+        Parses the SQL and adds WHERE clauses for domain concepts.
+        """
+        where_clauses = build_where_clauses(domain_resolutions)
+        if not where_clauses:
+            return sql
+        
+        # Check if SQL already has a WHERE clause
+        sql_upper = sql.upper()
+        
+        # Simple heuristic: if WHERE exists, append with AND
+        # If no WHERE, add WHERE clause before GROUP BY/HAVING/ORDER BY/LIMIT
+        if 'WHERE' in sql_upper:
+            # Find WHERE position and check if filters are already present
+            where_pos = sql_upper.find('WHERE')
+            where_content = sql[where_pos:].lower()
+            
+            # Check if any filter is already present
+            filters_needed = []
+            for clause in where_clauses:
+                # Simplified check - look for the column name in WHERE clause
+                clause_parts = clause.lower().split()
+                if len(clause_parts) >= 1:
+                    column_part = clause_parts[0]  # e.g., "assettype.name"
+                    if column_part not in where_content:
+                        filters_needed.append(clause)
+            
+            if filters_needed:
+                # Find position to insert (before GROUP BY, ORDER BY, LIMIT, or end)
+                insert_keywords = ['GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT']
+                insert_pos = len(sql)
+                for keyword in insert_keywords:
+                    pos = sql_upper.find(keyword, where_pos)
+                    if pos != -1 and pos < insert_pos:
+                        insert_pos = pos
+                
+                # Insert filters with AND
+                filter_str = ' AND ' + ' AND '.join(filters_needed)
+                sql = sql[:insert_pos].rstrip() + filter_str + ' ' + sql[insert_pos:]
+        else:
+            # No WHERE clause - add one
+            # Find position before GROUP BY/HAVING/ORDER BY/LIMIT
+            insert_keywords = ['GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT']
+            insert_pos = len(sql)
+            for keyword in insert_keywords:
+                pos = sql_upper.find(keyword)
+                if pos != -1 and pos < insert_pos:
+                    insert_pos = pos
+            
+            # Insert WHERE clause
+            filter_str = '\nWHERE ' + ' AND '.join(where_clauses)
+            sql = sql[:insert_pos].rstrip() + filter_str + '\n' + sql[insert_pos:]
+        
+        return sql
     
     # Pre-execution SQL Validation
     @trace_step('validate_sql')
@@ -580,16 +1224,107 @@ Return ONLY the SQL query, nothing else.
                 table_connections[from_table_lower].add(to_table_orig)  # Store original case
         
         # Find tables that connect 2+ selected tables (these are bridge tables)
+        # Use canonical names so we don't count the same table twice (e.g. InspectionQuestion vs inspectionQuestion)
         for table_name_lower, connected_tables in table_connections.items():
-            if len(connected_tables) >= 2:
+            canonical_connected = {table_name_map.get(t.lower(), t) for t in connected_tables if t}
+            if len(canonical_connected) >= 2:
                 # This table connects multiple selected tables - it's a bridge table
-                # Get original case name from join graph
                 if table_name_lower in table_name_map:
                     original_name = table_name_map[table_name_lower]
                     bridge_tables.add(original_name)
-                    logger.info(f"Found bridge table '{original_name}' connecting {len(connected_tables)} selected tables: {list(connected_tables)}")
+                    logger.info(f"Found bridge table '{original_name}' connecting {len(canonical_connected)} selected tables: {list(canonical_connected)}")
         
         return bridge_tables
+
+    def _get_bridges_on_paths(self, selected_tables: set) -> set:
+        """
+        Return tables that appear on the shortest path between some pair of selected tables
+        (excluding the selected tables themselves). Minimal set actually needed to join selected tables.
+        """
+        on_path = set()
+        selected_list = list(selected_tables)
+        for i, t1 in enumerate(selected_list):
+            for t2 in selected_list[i + 1 :]:
+                if t1 == t2:
+                    continue
+                path = self.path_finder.find_shortest_path(t1, t2, max_hops=4)
+                if not path:
+                    continue
+                for rel in path:
+                    on_path.add(rel.get("from_table"))
+                    on_path.add(rel.get("to_table"))
+        return on_path - selected_tables
+
+    def _get_domain_bridges(self, domain_resolutions: List[Dict[str, Any]]) -> set:
+        """
+        Return preferred bridge tables for the current domain concept(s) from the registry.
+        Only tables that exist in the join graph are returned.
+        """
+        if not domain_resolutions or not self.domain_ontology:
+            return set()
+        terms_registry = self.domain_ontology.registry.get("terms", {})
+        graph_tables = self.join_graph["tables"]
+        out = set()
+        for res in domain_resolutions:
+            term = res.get("term")
+            if not term or term not in terms_registry:
+                continue
+            primary = terms_registry[term].get("resolution", {}).get("primary", {})
+            bridge_list = primary.get("bridge_tables", [])
+            for t in bridge_list:
+                if t in graph_tables:
+                    out.add(t)
+        return out
+
+    def _get_exclude_bridge_patterns(self, domain_resolutions: List[Dict[str, Any]]) -> List[str]:
+        """
+        Return substrings that should exclude a bridge table when present in its name.
+        Used when a domain term (e.g. inspection_questions) wants to drop noise bridges
+        like inspectionQAAttachment, inspectionQuestionGuidance, etc.
+        """
+        if not domain_resolutions or not self.domain_ontology:
+            return []
+        terms_registry = self.domain_ontology.registry.get("terms", {})
+        patterns: List[str] = []
+        for res in domain_resolutions:
+            term = res.get("term")
+            if not term or term not in terms_registry:
+                continue
+            primary = terms_registry[term].get("resolution", {}).get("primary", {})
+            for p in primary.get("exclude_bridge_patterns", []):
+                if p and p not in patterns:
+                    patterns.append(p)
+        return patterns
+
+    def _get_excluded_columns(self, domain_resolutions: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
+        """
+        Return per-table column names that must not be used when this domain is active.
+        Used when a term (e.g. crane) wants to forbid certain columns (e.g. asset.customerLocationId).
+        Keys are canonical table names from the join graph.
+        """
+        if not domain_resolutions or not self.domain_ontology:
+            return {}
+        terms_registry = self.domain_ontology.registry.get("terms", {})
+        table_name_map = {t.lower(): t for t in self.join_graph["tables"].keys()}
+        out: Dict[str, Set[str]] = {}
+        for res in domain_resolutions:
+            term = res.get("term")
+            if not term or term not in terms_registry:
+                continue
+            primary = terms_registry[term].get("resolution", {}).get("primary", {})
+            exclude = primary.get("exclude_columns", {})
+            if not isinstance(exclude, dict):
+                continue
+            for table, cols in exclude.items():
+                if not cols:
+                    continue
+                canonical = table_name_map.get(table.lower(), table)
+                if canonical not in out:
+                    out[canonical] = set()
+                for c in cols if isinstance(cols, list) else [cols]:
+                    if c:
+                        out[canonical].add(c)
+        return out
     
     def _extract_tables_from_join_plan(self, join_plan: str) -> set:
         """
@@ -710,13 +1445,23 @@ Return ONLY the SQL query, nothing else.
         import re
         # Extract from FROM and JOIN clauses
         table_pattern = r'\b(?:FROM|JOIN|INTO|UPDATE)\s+([a-zA-Z_][a-zA-Z0-9_]*)'
-        tables_in_sql = set(re.findall(table_pattern, sql, re.IGNORECASE))
+        tables_in_sql = set()
+        # Extract tables from FROM/JOIN clauses and convert to base tables
+        for table in re.findall(table_pattern, sql, re.IGNORECASE):
+            # Convert secure view to base table for lookup (single source of truth)
+            base_table = from_secure_view(table)
+            tables_in_sql.add(base_table)
+            logger.debug(f"Extracted table from FROM/JOIN: {table} -> {base_table}")
+        
         # Also extract from table.column patterns (SELECT, WHERE, ON, etc.)
         column_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)'
         for table, _ in re.findall(column_pattern, sql):
             # Convert secure view to base table for lookup (single source of truth)
             base_table = from_secure_view(table)
             tables_in_sql.add(base_table)
+            logger.debug(f"Extracted table from table.column pattern: {table} -> {base_table}")
+        
+        logger.info(f"Tables found in SQL query (after conversion to base tables): {sorted(tables_in_sql)}")
         
         # Build relevant table schemas (only tables used in query)
         table_schemas = []
@@ -728,6 +1473,10 @@ Return ONLY the SQL query, nothing else.
                 if len(columns) > settings.sql_max_columns_in_correction:
                     columns_str += f" ... ({len(columns)} total columns)"
                 table_schemas.append(f"{table_name}: {columns_str}")
+            else:
+                logger.warning(f"Table {table_name} not found in join_graph, skipping schema")
+        
+        logger.info(f"Built schemas for {len(table_schemas)} tables: {[s.split(':')[0] for s in table_schemas]}")
         
         # Get relevant relationships (only between tables in query)
         relevant_relationships = []
@@ -755,8 +1504,38 @@ Return ONLY the SQL query, nothing else.
         
         # Detect specific error types for targeted instructions
         is_group_by_error = "GROUP BY" in error_message.upper() or "not in GROUP BY" in error_message.upper() or "only_full_group_by" in error_message.lower()
+        is_duplicate_table_error = "Not unique table/alias" in error_message or "1066" in error_message
         
         group_by_instructions = ""
+        duplicate_table_instructions = ""
+        
+        if is_duplicate_table_error:
+            duplicate_table_instructions = """
+CRITICAL: DUPLICATE TABLE/ALIAS ERROR DETECTED
+
+The error "Not unique table/alias" means you are joining the same table multiple times.
+
+COMMON CAUSES:
+1. Same table joined twice with different conditions:
+   BAD:
+   JOIN workOrder ON workOrder.customerId = customer.id
+   JOIN workOrder ON workOrder.customerLocationId = customerLocation.id
+   
+   GOOD (pick the most direct path):
+   JOIN workOrder ON workOrder.customerLocationId = customerLocation.id
+
+2. Trying to use multiple join paths to the same table:
+   - Choose the SHORTEST path with HIGHEST confidence
+   - Use inspectionTemplateWorkOrder.workOrderId = workOrder.id (direct FK, conf: 1.0)
+   - NOT customerLocation → customer → workOrder (indirect, longer path)
+
+FIX STRATEGY:
+- Identify which table appears in multiple JOIN clauses
+- Keep ONLY the most direct join (fewest hops, highest confidence)
+- Remove all other joins to that table
+- If you need multiple conditions, combine them in the WHERE clause instead
+"""
+        
         if is_group_by_error:
             # Extract the problematic expression from error message if possible
             import re
@@ -815,14 +1594,15 @@ INSTRUCTIONS:
    - Using the correct table name for each column
    - Ensuring all columns exist in their respective tables
    - Fixing any join conditions that reference wrong columns
-{group_by_instructions}
+   - If same table appears in multiple JOINs, keep only the most direct path
+{duplicate_table_instructions}{group_by_instructions}
 4. Return ONLY the corrected SQL query, nothing else
 5. Do NOT add comments or explanations
 
 CORRECTED SQL QUERY:"""
         
-        logger.info(f"[PROMPT] correct_sql prompt (attempt {correction_attempts + 1}):\n{prompt}")
-        
+        logger.info(f"[PROMPT] correct_sql prompt (attempt {correction_attempts + 1}):\n")
+        logger.debug(f"[PROMPT] correct_sql prompt {prompt}")
         try:
             response = self.llm.invoke(prompt)
             corrected_sql = str(response.content).strip() if hasattr(response, 'content') and response.content else ""
@@ -1143,6 +1923,15 @@ If date filters exist, ensure you're filtering on the correct table columns.
 
     def _build(self):
         g = StateGraph(SQLGraphState)
+        
+        # Follow-up detection node (new)
+        g.add_node("detect_followup", self._detect_followup_question)
+        
+        # Domain ontology nodes
+        g.add_node("extract_domain_terms", self._extract_domain_terms)
+        g.add_node("resolve_domain_terms", self._resolve_domain_terms)
+        
+        # Existing nodes
         g.add_node("select_tables", self._select_tables)
         g.add_node("filter_relationships", self._filter_relationships)
         g.add_node("plan_joins", self._plan_joins)
@@ -1152,7 +1941,13 @@ If date filters exist, ensure you're filtering on the correct table columns.
         g.add_node("execute", self._execute_and_validate)
         g.add_node("finalize", self._finalize)
 
-        g.set_entry_point("select_tables")
+        # Start with follow-up detection
+        g.set_entry_point("detect_followup")
+        g.add_edge("detect_followup", "extract_domain_terms")
+        g.add_edge("extract_domain_terms", "resolve_domain_terms")
+        g.add_edge("resolve_domain_terms", "select_tables")
+        
+        # Existing edges
         g.add_edge("select_tables", "filter_relationships")
         g.add_edge("filter_relationships", "plan_joins")
         g.add_edge("plan_joins", "generate_sql")
@@ -1186,14 +1981,21 @@ If date filters exist, ensure you're filtering on the correct table columns.
         g.add_edge("finalize", END)
         return g.compile()
 
-    def query(self, question: str) -> str:
+    def query(self, question: str, previous_results: Optional[List[Dict[str, Any]]] = None) -> str:
         """
         Query the database and return the answer.
         
-        Returns the final_answer string. For structured data, use query_with_structured().
+        Args:
+            question: User's question
+            previous_results: Optional list of previous query results for follow-up questions
+        
+        Returns:
+            The final_answer string. For structured data, use query_with_structured().
         """
         state: SQLGraphState = {
             "question": question,
+            "domain_terms": [],
+            "domain_resolutions": [],
             "tables": [],
             "allowed_relationships": [],
             "join_plan": "",
@@ -1207,19 +2009,32 @@ If date filters exist, ensure you're filtering on the correct table columns.
             "last_sql_error": None,
             "correction_history": None,
             "validation_errors": None,
+            "previous_results": previous_results,
+            "is_followup": False,
+            "referenced_ids": None,
         }
         out = self.workflow.invoke(state)
         return out.get("final_answer") or "No answer generated."
     
-    def query_with_structured(self, question: str) -> Dict[str, Any]:
+    def query_with_structured(
+        self, 
+        question: str,
+        previous_results: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
         """
         Query the database and return both answer and structured data.
+        
+        Args:
+            question: User's question
+            previous_results: Optional list of previous query results for follow-up questions
         
         Returns:
             Dict with 'answer' (str) and 'structured_result' (List[Dict] | None)
         """
         state: SQLGraphState = {
             "question": question,
+            "domain_terms": [],
+            "domain_resolutions": [],
             "tables": [],
             "allowed_relationships": [],
             "join_plan": "",
@@ -1233,9 +2048,14 @@ If date filters exist, ensure you're filtering on the correct table columns.
             "last_sql_error": None,
             "correction_history": None,
             "validation_errors": None,
+            "previous_results": previous_results,
+            "is_followup": False,
+            "referenced_ids": None,
         }
         out = self.workflow.invoke(state)
         return {
             "answer": out.get("final_answer") or "No answer generated.",
-            "structured_result": out.get("structured_result")
+            "structured_result": out.get("structured_result"),
+            "tables_used": out.get("tables"),  # Tables used in the query (for memory context)
+            "sql_query": out.get("sql"),
         }

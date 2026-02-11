@@ -50,12 +50,14 @@ data: {"event":"route_decision","route":"sql"}
 
 data: {"event":"tool_start","tool":"sql_agent"}
 
-data: {"event":"token","channel":"final","content":"There"}
+data: {"event":"token","channel":"final","content":"There","structured_data":[{"id":1,"name":"John"},{"id":2,"name":"Jane"}]}
 
 data: {"event":"token","channel":"final","content":" are 10"}
 
 data: {"event":"complete","stats":{"tokens":15}}
 ```
+
+*`structured_data` is sent only in the first token of the `final` channel when the SQL agent returns tabular results; the BFF converts it to markdown.*
 
 ### Event Types
 
@@ -63,7 +65,7 @@ data: {"event":"complete","stats":{"tokens":15}}
 |-------|-------------|
 | `route_decision` | Agent routing decision (SQL/RAG/GENERAL) |
 | `tool_start` | Tool execution beginning |
-| `token` | Content token with channel |
+| `token` | Content token with channel; may include `structured_data` (first token of `final` channel only) for BFF markdown conversion |
 | `complete` | Stream finished |
 | `error` | Error occurred |
 
@@ -454,7 +456,7 @@ DOMAIN_REGISTRY_PATH=artifacts/domain_registry.json  # Registry location
 DOMAIN_EXTRACTION_ENABLED=true                        # Enable/disable extraction
 ```
 
-**Location**: `src/utils/config.py`
+**Location**: `src/config/settings.py`
 
 #### Example Queries
 
@@ -989,7 +991,7 @@ After correction, SQL automatically goes through validation again:
 
 ### Configuration
 
-**Location**: `src/utils/config.py`
+**Location**: `src/config/settings.py`
 
 ```python
 sql_correction_max_attempts: int = 3  # Max correction attempts
@@ -1048,22 +1050,18 @@ graph TB
 
 **Location**: `src/utils/sql/secure_views.py`
 
-```python
-SECURE_VIEW_MAP = {
-    "user": "secure_user",
-    "employee": "secure_employee",
-    "workOrder": "secure_workorder",
-    "customer": "secure_customer",
-    "customerLocation": "secure_customerlocation",
-    "customerContact": "secure_customercontact",
-}
+The secure view mapping is **discovered dynamically** from the database at runtime (not a static dict in code). Base tables that require secure views are configured via the `SECURE_BASE_TABLES` environment variable (comma-separated list). The module queries the database for views whose names start with `secure_` and matches them to base tables. Use `get_secure_view_map()` and `get_secure_views()` from this module; the map is initialized via `initialize_secure_view_map(db_connection)` at startup.
+
+**Example configuration** (`.env`):
+```bash
+SECURE_BASE_TABLES=user,customer,customerLocation,customerContact,employee,workOrder
 ```
 
 **Key Rules**:
-1. Only tables in `SECURE_VIEW_MAP` get `secure_*` variants
-2. LLM uses logical names (e.g., `employee`)
-3. System rewrites deterministically (`employee` → `secure_employee`)
-4. Validation prevents hallucinations before execution
+1. Only base tables listed in `SECURE_BASE_TABLES` get `secure_*` variants (views must exist in MySQL).
+2. LLM uses logical names (e.g., `employee`).
+3. System rewrites deterministically (`employee` → `secure_employee`) using the discovered map.
+4. Validation prevents hallucinations before execution.
 
 ### Rewriting Flow
 
@@ -1215,13 +1213,27 @@ DB_NAME=crewos
 DB_ENCRYPT_KEY=your_encryption_key_here
 ```
 
-#### OpenAI Configuration
+#### LLM Provider (OpenAI or Ollama)
+
+**OpenAI** (default – production):
 
 ```bash
+LLM_PROVIDER=openai
 OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_TEMPERATURE=0.1
 ```
+
+**Ollama** (self-hosted – no API cost when running on our infra):
+
+```bash
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3
+OLLAMA_EMBEDDING_MODEL=all-MiniLM-L6-v2
+```
+
+See `docs/specialized/INTEGRATION_AND_REFERENCE.md` for cost estimation and model comparison.
 
 #### Domain Ontology Settings
 
@@ -1389,7 +1401,8 @@ graph LR
 - **Tables**: 122 (tested)
 - **Relationships**: 1,801
 - **Max Hops**: 4 (configurable)
-- **Context Window**: 128K tokens (gpt-4o-mini)
+- **Context Window**: 128K tokens (gpt-4o-mini); varies with Ollama model
+- **Cost**: See `docs/specialized/INTEGRATION_AND_REFERENCE.md` for per-query token ranges (500–2000) and cost by model; Ollama has no API cost on our infra
 
 ### Optimization Strategies
 
@@ -1402,7 +1415,7 @@ graph LR
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| **LLM** | OpenAI GPT-4o-mini | Natural language understanding |
+| **LLM** | **OpenAI gpt-4o-mini** (default) or **Ollama** (self-hosted) | Natural language understanding; Ollama = no API cost on our infra |
 | **Workflow** | LangGraph | Agent orchestration |
 | **Database** | MySQL + SQLAlchemy | Data storage |
 | **Vector DB** | ChromaDB | Document embeddings |
@@ -1644,6 +1657,7 @@ The codebase is organized into a modular structure:
 **LLM** (`src/llm/`):
 - LLM client abstraction
 - Embedding service
+- Response utilities (`response_utils.py`) for multi-format model outputs (string vs structured content blocks with reasoning)
 
 **SQL Utilities** (`src/sql/`):
 - `execution/` - SQL execution and secure rewriting

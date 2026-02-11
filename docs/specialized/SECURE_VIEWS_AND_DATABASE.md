@@ -12,23 +12,18 @@ This document covers the secure views architecture (encrypted data access) and M
 
 LLMs were told to "use secure_* views" but didn't know which tables have them, leading to hallucinated tables like `secure_inspections` (doesn't exist).
 
-### The Solution: Explicit Mapping
+### The Solution: Explicit Mapping (Dynamic Discovery)
 
-**Location**: `src/config/constants.py` (SECURE_VIEW_MAP), `src/utils/sql/secure_views.py` (rewriting logic)
+**Location**: `src/utils/sql/secure_views.py` (mapping discovery and rewriting logic)
 
-```python
-# Single source of truth - only these get secure_* variants
-SECURE_VIEW_MAP = {
-    "user": "secure_user",
-    "customerLocation": "secure_customerlocation",
-    "customerContact": "secure_customercontact",
-    "employee": "secure_employee",
-    "workOrder": "secure_workorder",
-    "customer": "secure_customer",
-}
+The secure view mapping is **discovered from the database at runtime**, not hardcoded. Base tables that require secure views are listed in the `SECURE_BASE_TABLES` environment variable (comma-separated). On startup, the system queries the database for views whose names start with `secure_` and matches them to these base tables (e.g. `employee` → `secure_employee`). Use `get_secure_view_map()` and `get_secure_views()` from this module.
+
+**Configuration** (`.env`):
+```bash
+SECURE_BASE_TABLES=user,customer,customerLocation,customerContact,employee,workOrder
 ```
 
-**Critical rule**: Only tables in this map get `secure_*` variants. All others use base table names.
+**Critical rule**: Only base tables listed in `SECURE_BASE_TABLES` (with a matching `secure_*` view in MySQL) get rewritten. All others use base table names.
 
 ### Workflow
 
@@ -58,8 +53,8 @@ SELECT firstName, lastName FROM secure_employee WHERE id = 1
 
 ### Adding New Secure Views
 
-1. Add to `SECURE_VIEW_MAP` in `src/config/constants.py`
-2. Create the view in MySQL with `AES_DECRYPT(..., @aesKey)`
+1. Create the view in MySQL with `AES_DECRYPT(..., @aesKey)` (name must be `secure_<basename>`).
+2. Add the base table to `SECURE_BASE_TABLES` in `.env` (comma-separated).
 3. Rebuild join graph: `uv run python scripts/build_join_graph.py`
 4. Test: `uv run python scripts/test_secure_views.py`
 
@@ -118,7 +113,6 @@ DB_ENCRYPT_KEY=your_encryption_key_here
 
 ## Related Files
 
-- `src/config/constants.py` – `SECURE_VIEW_MAP`, `SECURE_VIEWS`
-- `src/utils/sql/secure_views.py` – `rewrite_secure_tables()`, `validate_tables_exist()`
+- `src/utils/sql/secure_views.py` – `get_secure_view_map()`, `get_secure_views()`, `initialize_secure_view_map()`, `rewrite_secure_tables()`, `validate_tables_exist()`
 - `src/infra/database.py` – Session variable listener
 - `src/tools/sql_tool.py` – Uses secure view rewriting

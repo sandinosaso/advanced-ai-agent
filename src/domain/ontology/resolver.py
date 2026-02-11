@@ -70,15 +70,15 @@ class DomainTermResolver:
         
         # Try primary resolution first
         if "primary" in resolution:
-            return self._build_resolution(term, entity, resolution["primary"], "primary")
+            return self._build_resolution(term, entity, resolution["primary"], "primary", resolution.get("extra"))
         
         # Try secondary
         if "secondary" in resolution:
-            return self._build_resolution(term, entity, resolution["secondary"], "secondary")
+            return self._build_resolution(term, entity, resolution["secondary"], "secondary", resolution.get("extra"))
         
         # Try fallback
         if "fallback" in resolution:
-            return self._build_resolution(term, entity, resolution["fallback"], "fallback")
+            return self._build_resolution(term, entity, resolution["fallback"], "fallback", resolution.get("extra"))
         
         logger.warning(f"No resolution strategies found for term '{term}'")
         return None
@@ -88,7 +88,8 @@ class DomainTermResolver:
         term: str,
         entity: str,
         strategy_config: Dict[str, Any],
-        strategy_name: str
+        strategy_name: str,
+        extra: Optional[Dict[str, Any]] = None
     ) -> DomainResolution:
         """
         Build DomainResolution from strategy configuration.
@@ -165,16 +166,46 @@ class DomainTermResolver:
         
         confidence = strategy_config.get("confidence", 0.5)
         
+        # Build hints dictionary for special patterns
+        hints = {}
+        
+        # Handle logic_hint (for payroll rules, etc.)
+        if "logic" in strategy_config:
+            hints["logic_hint"] = strategy_config["logic"]
+        elif "logic_hint" in strategy_config:
+            hints["logic_hint"] = strategy_config["logic_hint"]
+        
+        # Handle extraction_pattern if present
+        extraction_pattern = strategy_config.get("extraction_pattern")
+        if extraction_pattern:
+            hints["extraction_pattern"] = extraction_pattern
+        
+        # Handle display_hint if present
+        display_hint = strategy_config.get("display_hint")
+        if display_hint:
+            hints["display_hint"] = display_hint
+
+        # Merge strategy-level anchor_table into extra (for FROM clause selection)
+        resolution_extra = dict(extra) if extra else {}
+        if "anchor_table" in strategy_config:
+            resolution_extra["anchor_table"] = strategy_config["anchor_table"]
+        
+        # Extract required joins if present
+        required_joins = strategy_config.get("required_joins")
+
         resolution = DomainResolution(
             term=term,
             entity=entity,
             tables=tables,
             filters=filters,
             confidence=confidence,
-            resolution_strategy=strategy_name
+            resolution_strategy=strategy_name,
+            hints=hints if hints else None,
+            extra=resolution_extra if resolution_extra else None,
+            required_joins=required_joins if required_joins else None
         )
         
-        logger.debug(f"Resolved '{term}' using {strategy_name} strategy: {len(tables)} tables, {len(filters)} filters")
+        logger.debug(f"Resolved '{term}' using {strategy_name} strategy: {len(tables)} tables, {len(filters)} filters, hints: {bool(hints)}, required_joins: {len(required_joins) if required_joins else 0}")
         
         return resolution
     

@@ -7,6 +7,25 @@ Formats domain resolutions into human-readable context for LLM prompts.
 from typing import Dict, Any, List
 
 
+def get_resolution_extra(resolution: Dict[str, Any], key: str, default: Any = None) -> Any:
+    """
+    Extract a term-specific attribute from resolution.extra.
+    
+    Use this to access term-specific config (e.g. regular_hours_threshold)
+    in a type-friendly way instead of reading from primary strategy.
+    
+    Args:
+        resolution: Domain resolution dict (with optional "extra" key)
+        key: Attribute key (e.g. "regular_hours_threshold", "rule_source")
+        default: Default value if key not found
+        
+    Returns:
+        Value from extra[key] or default
+    """
+    extra = resolution.get("extra") or {}
+    return extra.get(key, default)
+
+
 def format_domain_context_for_table_selection(resolutions: List[Dict[str, Any]]) -> str:
     """
     Format domain resolutions for table selection prompt (tables only, no filters).
@@ -29,6 +48,22 @@ def format_domain_context_for_table_selection(resolutions: List[Dict[str, Any]])
     for res in resolutions:
         lines.append(f"\nConcept: '{res['term']}' ({res['entity']})")
         lines.append(f"  Tables needed: {', '.join(res['tables'])}")
+        
+        # Include hints if present
+        if res.get('hints'):
+            hints = res['hints']
+            if 'logic_hint' in hints:
+                logic_hint = hints['logic_hint']
+                # Handle multi-line hints by preserving formatting
+                if '\n' in logic_hint:
+                    lines.append(f"  Calculation hint:")
+                    for hint_line in logic_hint.split('\n'):
+                        lines.append(f"    {hint_line}")
+                else:
+                    lines.append(f"  Calculation hint: {logic_hint}")
+            if 'extraction_pattern' in hints:
+                lines.append(f"  Extraction pattern: {hints['extraction_pattern']}")
+        
         lines.append(f"  Confidence: {res['confidence']} (strategy: {res['strategy']})")
     
     lines.append("=" * 70)
@@ -74,6 +109,23 @@ def format_domain_context(resolutions: List[Dict[str, Any]]) -> str:
                     lines.append(f"    - {column_ref} {f['operator']} '{f['value']}'")
         else:
             lines.append(f"  Note: Structural grouping (no filters needed)")
+        
+        # Include hints if present
+        if res.get('hints'):
+            hints = res['hints']
+            if 'logic_hint' in hints:
+                logic_hint = hints['logic_hint']
+                # Handle multi-line hints by preserving formatting
+                if '\n' in logic_hint:
+                    lines.append(f"  Calculation hint:")
+                    for hint_line in logic_hint.split('\n'):
+                        lines.append(f"    {hint_line}")
+                else:
+                    lines.append(f"  Calculation hint: {logic_hint}")
+            if 'extraction_pattern' in hints:
+                lines.append(f"  Extraction pattern: {hints['extraction_pattern']}")
+            if 'display_hint' in hints:
+                lines.append(f"  Display hint: {hints['display_hint']}")
         
         lines.append(f"  Confidence: {res['confidence']} (strategy: {res['strategy']})")
     

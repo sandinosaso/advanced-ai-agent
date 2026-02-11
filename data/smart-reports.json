@@ -1,0 +1,2324 @@
+[
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Total_questions",
+                "order": 1,
+                "enabled": true,
+                "accessor": "total_questions"
+            },
+            {
+                "type": "TEXT",
+                "label": "Answered_questions",
+                "order": 2,
+                "enabled": true,
+                "accessor": "answered_questions"
+            },
+            {
+                "type": "TEXT",
+                "label": "Unanswered_questions",
+                "order": 3,
+                "enabled": true,
+                "accessor": "unanswered_questions"
+            }
+        ],
+        "id": "03a954d0-7f68-11ef-a741-eb0c7d60cdb8",
+        "name": "Failed!",
+        "description": "fail fail",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "List inspections and their amount of questions, create a column for amount of answered and one for unanswered",
+        "query": "SELECT i.id AS inspection_id,\n        COUNT(iq.id) AS total_questions,\n        SUM(CASE WHEN iqa.id IS NOT NULL THEN 1 ELSE 0 END) AS answered_questions,\n        COUNT(iq.id) - SUM(CASE WHEN iqa.id IS NOT NULL THEN 1 ELSE 0 END) AS unanswered_questions\nFROM inspection i\nLEFT JOIN inspectionQuestionAnswer iqa ON i.id = iqa.inspectionId\nLEFT JOIN inspectionQuestion iq ON iqa.inspectionQuestionId = iq.id\nGROUP BY i.id;",
+        "context": "WORKORDER",
+        "createdBy": null,
+        "createdAt": "2024-09-30T20:10:18.000Z",
+        "updatedAt": "2025-10-02T12:50:55.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Employee  Name",
+                "order": 1,
+                "enabled": true,
+                "accessor": "Employee Name"
+            },
+            {
+                "type": "DATE",
+                "label": "Date",
+                "order": 2,
+                "enabled": true,
+                "accessor": "Date",
+                "dateFilterAccessor": true
+            },
+            {
+                "type": "TEXT",
+                "label": "Work  Order  Number/s",
+                "order": 3,
+                "enabled": true,
+                "accessor": "Work Order Number"
+            },
+            {
+                "type": "NUMBER",
+                "label": "Regular  Time",
+                "order": 4,
+                "enabled": true,
+                "accessor": "Regular Time",
+                "hasTotal": true
+            },
+            {
+                "type": "NUMBER",
+                "label": "Over Time",
+                "order": 5,
+                "enabled": true,
+                "accessor": "OverTime",
+                "hasTotal": true
+            },
+            {
+                "type": "NUMBER",
+                "label": "Double  Time",
+                "order": 6,
+                "enabled": true,
+                "accessor": "Double Time",
+                "hasTotal": true
+            },
+            {
+                "type": "NUMBER",
+                "label": "Total",
+                "order": "7",
+                "accessor": "Total Time",
+                "hasTotal": true
+            }
+        ],
+        "id": "154350a5-d719-42e7-bcba-3f4e1b4e2a94",
+        "name": "Payroll v1",
+        "description": "payroll v1",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "create a report that will contains all WorkTimes per user and date of the work times, so group all user work times per date, add a column to show the work order number where those Times where added, and for the date display the weekday (for example mm/dd/yyyy ddd), and for the user show name and last name in the same column called Employee Name\nThen show column for Regular Time, for OverTime and Double Time, but the data in those columns needs to be calculated the following way, sum all work time hours for the day and: \n- all hours, with a date on a Sunday, will be Double Time \n- all hours, with a date that is a weekday or Saturday, under or equal 8 hours would be Regular Time \n- all hours, with a date that is a weekday or Saturday, over 8 hours would be OverTime",
+        "query": "SELECT CONCAT(COALESCE(se.firstName, ''), ' ', COALESCE(se.lastName, '')) AS `Employee Name`, cwd.date AS `Date`, GROUP_CONCAT(DISTINCT sw.workOrderNumber ORDER BY sw.workOrderNumber SEPARATOR ', ') AS `Work Order Number`, CASE WHEN DAYOFWEEK(cwd.date) = 1 THEN 0 ELSE LEAST(SUM(COALESCE(wt.hours, 0)), 8) END AS `Regular Time`, CASE WHEN DAYOFWEEK(cwd.date) = 1 THEN 0 ELSE GREATEST(SUM(COALESCE(wt.hours, 0)) - 8, 0) END AS `OverTime`, CASE WHEN DAYOFWEEK(cwd.date) = 1 THEN SUM(COALESCE(wt.hours, 0)) ELSE 0 END AS `Double Time`, CASE WHEN DAYOFWEEK(cwd.date) = 1 THEN SUM(COALESCE(wt.hours, 0)) ELSE LEAST(SUM(COALESCE(wt.hours, 0)), 8) + GREATEST(SUM(COALESCE(wt.hours, 0)) - 8, 0) END AS `Total Time` FROM workTime wt JOIN secure_employee se ON se.id = wt.employeeId AND se.isInternal = 0 LEFT JOIN crewWorkDay cwd ON cwd.id = wt.crewWorkDayId LEFT JOIN crew c ON c.id = cwd.crewId LEFT JOIN secure_workOrder sw ON sw.id = c.workOrderId WHERE cwd.date IS NOT NULL AND sw.isInternal = 0 GROUP BY se.id, cwd.date;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-09-29T18:42:29.000Z",
+        "updatedAt": "2025-10-10T19:04:27.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "User First Name",
+                "order": 1,
+                "enabled": true,
+                "accessor": "userFirstName"
+            },
+            {
+                "type": "TEXT",
+                "label": "User Last Name",
+                "order": 2,
+                "enabled": true,
+                "accessor": "userLastName"
+            },
+            {
+                "type": "TEXT",
+                "label": "Work Date",
+                "order": 3,
+                "enabled": true,
+                "accessor": "workDate"
+            },
+            {
+                "type": "TEXT",
+                "label": "Regular Time",
+                "order": 4,
+                "enabled": true,
+                "accessor": "RegularTime"
+            },
+            {
+                "type": "TEXT",
+                "label": "Over Time",
+                "order": 5,
+                "enabled": true,
+                "accessor": "OverTime"
+            },
+            {
+                "type": "TEXT",
+                "label": "Double Time",
+                "order": 6,
+                "enabled": true,
+                "accessor": "DoubleTime"
+            }
+        ],
+        "id": "16af347a-2662-4c4a-9d08-6aec2144b6cd",
+        "name": "Payroll Test 1",
+        "description": "cami test 1 ",
+        "showSidebar": true,
+        "isInternal": true,
+        "showPeriodSelector": false,
+        "prompt": "create a report that will contains all WorkTimes  per user and date of the work times, so group all user work times per date, then show column for Regular Time, for OverTime and Double Time, but the data in those columns needs to be calculated the following way, sum all work time hours for the day and:\n- all hours, with a date on a Sunday, will be Double Time \n- all hours, with a date that is a weekday or Saturday, under or equal 8 hours would be Regular Time\n- all hours, with a date that is a weekday or Saturday, over 8 hours would be OverTime\n",
+        "query": "SELECT su.firstName AS userFirstName, su.lastName AS userLastName, t.work_date AS workDate, CASE WHEN DAYOFWEEK(t.work_date) = 1 THEN 0 ELSE LEAST(t.total_hours, 8) END AS RegularTime, CASE WHEN DAYOFWEEK(t.work_date) = 1 THEN 0 ELSE GREATEST(t.total_hours - 8, 0) END AS OverTime, CASE WHEN DAYOFWEEK(t.work_date) = 1 THEN t.total_hours ELSE 0 END AS DoubleTime FROM (SELECT wt.employeeId, DATE(COALESCE(wt.startTime, wt.endTime)) AS work_date, SUM(wt.hours) AS total_hours FROM workTime wt JOIN secure_employee e ON e.id = wt.employeeId WHERE e.isInternal = 0 GROUP BY wt.employeeId, DATE(COALESCE(wt.startTime, wt.endTime))) t JOIN secure_user su ON su.employeeId = t.employeeId ORDER BY su.lastName, su.firstName, t.work_date;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-09-29T18:36:57.000Z",
+        "updatedAt": "2025-09-29T18:36:57.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Setting Name",
+                "order": 1,
+                "enabled": true,
+                "accessor": "settingName"
+            },
+            {
+                "type": "TEXT",
+                "label": "Status",
+                "order": 2,
+                "enabled": true,
+                "accessor": "status"
+            },
+            {
+                "type": "TEXT",
+                "label": "Value Type",
+                "order": 3,
+                "enabled": true,
+                "accessor": "valueType"
+            },
+            {
+                "type": "TEXT",
+                "label": "Setting Value",
+                "order": 4,
+                "enabled": true,
+                "accessor": "settingValue"
+            },
+            {
+                "type": "TEXT",
+                "label": "Value Options",
+                "order": 5,
+                "enabled": true,
+                "accessor": "valueOptions"
+            },
+            {
+                "type": "TEXT",
+                "label": "Description",
+                "order": 6,
+                "enabled": true,
+                "accessor": "description"
+            },
+            {
+                "type": "TEXT",
+                "label": "Status Only",
+                "order": 7,
+                "enabled": true,
+                "accessor": "statusOnly"
+            },
+            {
+                "type": "TEXT",
+                "label": "Value Only",
+                "order": 8,
+                "enabled": true,
+                "accessor": "valueOnly"
+            },
+            {
+                "type": "TEXT",
+                "label": "Value Placeholder",
+                "order": 9,
+                "enabled": true,
+                "accessor": "valuePlaceholder"
+            },
+            {
+                "type": "TEXT",
+                "label": "Value Read Only",
+                "order": 10,
+                "enabled": true,
+                "accessor": "valueReadOnly"
+            },
+            {
+                "type": "TEXT",
+                "label": "Status Change Function",
+                "order": 11,
+                "enabled": true,
+                "accessor": "statusChangeFunction"
+            },
+            {
+                "type": "TEXT",
+                "label": "Is Internal",
+                "order": 12,
+                "enabled": true,
+                "accessor": "isInternal"
+            },
+            {
+                "type": "TEXT",
+                "label": "Feature",
+                "order": 13,
+                "enabled": true,
+                "accessor": "feature"
+            },
+            {
+                "type": "TEXT",
+                "label": "Send On App Login",
+                "order": 14,
+                "enabled": true,
+                "accessor": "sendOnAppLogin"
+            },
+            {
+                "type": "TEXT",
+                "label": "Package Name",
+                "order": 15,
+                "enabled": true,
+                "accessor": "packageName"
+            },
+            {
+                "type": "TEXT",
+                "label": "Updated By Name",
+                "order": 16,
+                "enabled": true,
+                "accessor": "updatedByName"
+            },
+            {
+                "type": "TEXT",
+                "label": "Updated By Email",
+                "order": 17,
+                "enabled": true,
+                "accessor": "updatedByEmail"
+            }
+        ],
+        "id": "18026f10-1d7f-4d39-9a8e-c7e10e068228",
+        "name": "Settings",
+        "description": null,
+        "showSidebar": true,
+        "isInternal": true,
+        "showPeriodSelector": false,
+        "prompt": "list all settings and the related information",
+        "query": "select s.name as settingName, s.status, s.valueType, s.value as settingValue, s.valueOptions, s.description, s.statusOnly, s.valueOnly, s.valuePlaceholder, s.valueReadOnly, s.statusChangeFunction, s.isInternal, s.feature, s.sendOnAppLogin, p.name as packageName, concat(su.firstName, ' ', su.lastName) as updatedByName, su.email as updatedByEmail from setting s left join package p on p.id = s.packageId left join secure_user su on su.id = s.updatedBy;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-11-05T19:10:05.000Z",
+        "updatedAt": "2025-11-05T19:10:05.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "WO_LINK",
+                "label": "Work Order Number",
+                "order": 1,
+                "enabled": true,
+                "accessor": "workOrderNumber"
+            },
+            {
+                "type": "TEXT",
+                "label": "First Name",
+                "order": 2,
+                "enabled": true,
+                "accessor": "firstName"
+            },
+            {
+                "type": "TEXT",
+                "label": "Last Name",
+                "order": 3,
+                "enabled": true,
+                "accessor": "lastName"
+            },
+            {
+                "type": "TEXT",
+                "label": "Work Order Id",
+                "order": "4",
+                "accessor": "workOrderId"
+            }
+        ],
+        "id": "19060194-4d4b-4bb3-a2f2-f2d1dd41842e",
+        "name": "Work Orders and Leads",
+        "description": "Work Orders and Leads",
+        "showSidebar": true,
+        "isInternal": true,
+        "showPeriodSelector": false,
+        "prompt": "List all work orders and their leads",
+        "query": "\nSELECT  wo.workOrderNumber AS workOrderNumber,\n        wo.description     AS description,\n        e.firstName        AS firstName,\n        e.lastName         AS lastName,\n        e.email            AS email,\n        e.phone            AS phone,\nwo.id AS workOrderId\nFROM    secure_workOrder wo\nLEFT JOIN crew        c  ON c.workOrderId = wo.id\nLEFT JOIN employeeCrew ec ON ec.crewId = c.id AND ec.isLead = 1\nLEFT JOIN secure_employee e ON e.id = ec.employeeId AND e.isInternal = 0\nWHERE   wo.isInternal = 0;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-03-11T16:42:20.000Z",
+        "updatedAt": "2025-10-06T15:17:46.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "WO_LINK",
+                "label": "Work Order Number",
+                "order": 1,
+                "enabled": true,
+                "accessor": "workOrderNumber"
+            },
+            {
+                "type": "TEXT",
+                "label": "Work Order Id",
+                "order": "1",
+                "enabled": false,
+                "accessor": "workOrderId"
+            },
+            {
+                "type": "DATE",
+                "label": "Start Date",
+                "order": 2,
+                "enabled": true,
+                "accessor": "startDate",
+                "dateFilterAccessor": true
+            },
+            {
+                "type": "DATE",
+                "label": "End Date",
+                "order": 3,
+                "enabled": true,
+                "accessor": "endDate",
+                "dateFilterAccessor": true
+            },
+            {
+                "type": "TEXT",
+                "label": "Custom Attribute",
+                "order": 4,
+                "enabled": true,
+                "accessor": "customAttribute"
+            },
+            {
+                "type": "TEXT",
+                "label": "Status",
+                "order": 5,
+                "enabled": true,
+                "accessor": "status"
+            },
+            {
+                "type": "TEXT",
+                "label": "Customer Name",
+                "order": 6,
+                "enabled": true,
+                "accessor": "customerName"
+            },
+            {
+                "type": "TEXT",
+                "label": "Work Order Id",
+                "order": "7",
+                "accessor": "workOrderId"
+            },
+            {
+                "type": "TEXT",
+                "label": "Work Order Id",
+                "order": "8",
+                "accessor": "workOrderId"
+            }
+        ],
+        "id": "1e57fbde-f684-420a-9021-6b6ad29e2895",
+        "name": "List all WO",
+        "description": "List all WO",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "List all WO",
+        "query": "\nSELECT  wo.workOrderNumber,\n        wo.description,\n        wo.startDate,\n        wo.endDate,\n        JSON_UNQUOTE(JSON_EXTRACT(wo.dynamicAttributes, '$.customAttribute')) AS customAttribute,\n        JSON_UNQUOTE(JSON_EXTRACT(wo.dynamicAttributes, '$.Validity'))        AS Validity,\n        JSON_UNQUOTE(JSON_EXTRACT(wo.dynamicAttributes, '$.EC100'))           AS EC100,\n        wos.name AS status,\n        c.customerName AS customerName,\nwo.id as workOrderId\nFROM    secure_workOrder wo\nLEFT JOIN workOrderStatus   wos ON wo.workOrderStatusId = wos.id\nLEFT JOIN secure_customer   c   ON wo.customerId        = c.id\nWHERE   wo.isInternal = FALSE;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-03-11T17:06:57.000Z",
+        "updatedAt": "2025-10-10T19:02:41.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "DATE",
+                "label": "Date",
+                "order": 1,
+                "enabled": true,
+                "accessor": "date",
+                "dateFilterAccessor": true
+            },
+            {
+                "type": "TEXT",
+                "label": "Status",
+                "order": 2,
+                "enabled": true,
+                "accessor": "status"
+            },
+            {
+                "type": "WO_LINK",
+                "label": "Work Order Number",
+                "order": 3,
+                "enabled": true,
+                "accessor": "workOrderNumber"
+            },
+            {
+                "type": "TEXT",
+                "label": "Asset",
+                "order": 4,
+                "enabled": true,
+                "accessor": "asset"
+            },
+            {
+                "type": "TEXT",
+                "label": "workOrderId",
+                "order": "6",
+                "enabled": false,
+                "accessor": "workOrderId"
+            }
+        ],
+        "id": "2342ec30-8fac-11ef-b632-317d41434411",
+        "name": "All inspections",
+        "description": "All inspections",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "All inpsections, status, date, work order, asset",
+        "query": "\nSELECT  inspection.date,\n        inspection.status,\n        wo.workOrderNumber,\n        wo.id as workOrderId,\n        equipmentOption.name AS asset\nFROM    inspection\nLEFT JOIN inspectionTemplateWorkOrder itwo ON inspection.inspectionTemplateWorkOrderId = itwo.id\nLEFT JOIN secure_workOrder wo             ON itwo.workOrderId = wo.id\nLEFT JOIN crewWorkDay ON inspection.crewWorkDayId = crewWorkDay.id\nLEFT JOIN equipment   ON crewWorkDay.id = equipment.crewWorkDayId\nLEFT JOIN equipmentOption ON equipment.equipmentOptionId = equipmentOption.id;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2024-10-21T12:58:16.000Z",
+        "updatedAt": "2025-10-06T14:25:06.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Name",
+                "order": 1,
+                "enabled": true,
+                "accessor": "name"
+            },
+            {
+                "type": "TEXT",
+                "label": "Is Active",
+                "order": 2,
+                "enabled": true,
+                "accessor": "isActive"
+            }
+        ],
+        "id": "28eff41a-7a7a-4f40-a4a7-20ea73426275",
+        "name": "SL False Information ",
+        "description": "Fake News",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "List Service Locations",
+        "query": "SELECT name, isActive, isDefault\nFROM serviceLocation\nWHERE id IN (\"75f534b3-9fe4-4d64-a07c-b78995a37c76\");",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-03-18T14:15:34.000Z",
+        "updatedAt": "2025-08-07T17:53:41.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "NUMBER",
+                "label": "Work Order Number",
+                "order": 1,
+                "enabled": true,
+                "accessor": "workOrderNumber",
+                "hasTotal": true
+            }
+        ],
+        "id": "2f3ffee3-0f8b-4607-b9c2-0a0167561dee",
+        "name": "[TEST] Unexpected error",
+        "description": null,
+        "showSidebar": false,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "Bring lots of numbers",
+        "query": "SELECT w.workOrderNumber FROM secure_workOrder w WHERE w.isInternal = false;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-08-18T18:53:35.000Z",
+        "updatedAt": "2025-08-18T18:53:44.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "NUMBER",
+                "label": "Attribute",
+                "order": 1,
+                "total": 26,
+                "enabled": true,
+                "accessor": "attribute",
+                "hasTotal": true
+            },
+            {
+                "type": "TEXT",
+                "label": "Value",
+                "order": 2,
+                "total": 5203140621124.57,
+                "enabled": true,
+                "accessor": "value",
+                "hasTotal": false
+            }
+        ],
+        "id": "3b771489-5bc3-4f50-9f1e-d5ee57919b5f",
+        "name": "[TEST] Number values",
+        "description": null,
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "List currency dynamic attributes and their values",
+        "query": "SELECT da.`key` AS attribute,dav.`value` AS value FROM dynamicAttribute da JOIN dynamicAttributeValue dav ON da.id=dav.dynamicAttributeId WHERE da.type='CURRENCY';",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-08-18T18:54:56.000Z",
+        "updatedAt": "2026-02-04T18:23:15.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Date",
+                "order": 1,
+                "enabled": true,
+                "accessor": "date"
+            },
+            {
+                "type": "TEXT",
+                "label": "Status",
+                "order": 2,
+                "enabled": true,
+                "accessor": "status"
+            },
+            {
+                "type": "WO_LINK",
+                "label": "Work Order Number",
+                "order": 3,
+                "enabled": true,
+                "accessor": "workOrderNumber"
+            },
+            {
+                "type": "TEXT",
+                "label": "Asset",
+                "order": 4,
+                "enabled": true,
+                "accessor": "asset"
+            },
+            {
+                "type": "TEXT",
+                "label": "workOrderId",
+                "order": "5",
+                "accessor": "workOrderId"
+            }
+        ],
+        "id": "41729642-e253-4853-9eac-80fb1555c00b",
+        "name": "All services",
+        "description": "All services",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": null,
+        "query": "SELECT service.date, service.status, wo.workOrderNumber, wo.id as workOrderId, equipmentOption.name AS asset FROM service LEFT JOIN serviceTemplateWorkOrder itwo ON service.serviceTemplateWorkOrderId = itwo.id LEFT JOIN secure_workOrder wo ON itwo.workOrderId = wo.id LEFT JOIN crewWorkDay ON service.crewWorkDayId = crewWorkDay.id LEFT JOIN equipment ON crewWorkDay.id = equipment.crewWorkDayId LEFT JOIN equipmentOption ON equipment.equipmentOptionId = equipmentOption.id;\n",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-11-18T13:00:14.000Z",
+        "updatedAt": "2025-11-18T13:00:35.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Work Order Number",
+                "order": 1,
+                "enabled": true,
+                "accessor": "workOrderNumber"
+            },
+            {
+                "type": "DATETIME",
+                "label": "Start Date",
+                "order": 2,
+                "enabled": true,
+                "accessor": "startDate",
+                "dateFilterAccessor": true
+            },
+            {
+                "type": "TEXT",
+                "label": "Lead Name",
+                "order": 3,
+                "enabled": true,
+                "accessor": "leadName"
+            }
+        ],
+        "id": "44867f33-5a99-48f6-b77b-c7c6b53e696b",
+        "name": "SR with dates",
+        "description": "daes",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "Work order, leads and start date",
+        "query": "SELECT w.workOrderNumber, w.startDate, CONCAT(e.firstName,' ',e.lastName) AS leadName FROM secure_workOrder w JOIN crew c ON c.workOrderId=w.id JOIN employeeCrew ec ON ec.crewId=c.id AND ec.isLead=1 JOIN secure_employee e ON e.id=ec.employeeId WHERE w.isInternal=0 AND e.isInternal=0;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-09-05T16:50:20.000Z",
+        "updatedAt": "2025-09-05T16:55:15.000Z"
+    },
+    {
+        "columns": [
+            {
+                "label": "Description",
+                "order": 1,
+                "enabled": true,
+                "accessor": "description"
+            },
+            {
+                "label": "Start Date",
+                "order": 2,
+                "enabled": true,
+                "accessor": "startDate"
+            },
+            {
+                "label": "End Date",
+                "order": 3,
+                "enabled": true,
+                "accessor": "endDate"
+            },
+            {
+                "label": "Customer No",
+                "order": 4,
+                "enabled": true,
+                "accessor": "customerNo"
+            },
+            {
+                "label": "Customer Name",
+                "order": 5,
+                "enabled": true,
+                "accessor": "customerName"
+            },
+            {
+                "label": "Address",
+                "order": 6,
+                "enabled": true,
+                "accessor": "address"
+            },
+            {
+                "label": "City",
+                "order": 7,
+                "enabled": true,
+                "accessor": "city"
+            },
+            {
+                "label": "State",
+                "order": 8,
+                "enabled": true,
+                "accessor": "state"
+            },
+            {
+                "label": "Zip Code",
+                "order": 9,
+                "enabled": true,
+                "accessor": "zipCode"
+            },
+            {
+                "label": "Country Code",
+                "order": 10,
+                "enabled": true,
+                "accessor": "countryCode"
+            },
+            {
+                "label": "Customer Phone",
+                "order": 11,
+                "enabled": true,
+                "accessor": "customerPhone"
+            },
+            {
+                "label": "Customer Email",
+                "order": 12,
+                "enabled": true,
+                "accessor": "customerEmail"
+            }
+        ],
+        "id": "53aa24d0-8fa5-11ef-b632-317d41434411",
+        "name": "Anything",
+        "description": "Anything",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "Anything",
+        "query": "SELECT wo.description,\n        wo.startDate,\n        wo.endDate,\n        c.customerNo,\n        c.customerName AS customerName,\n        c.address,\n        c.city,\n        c.state,\n        c.zipCode,\n        c.countryCode,\n        c.phone   AS customerPhone,\n        c.email   AS customerEmail\nFROM secure_workOrder wo\nLEFT JOIN secure_customer c ON wo.customerId = c.id;",
+        "context": "WORKORDER",
+        "createdBy": null,
+        "createdAt": "2024-10-21T12:09:30.000Z",
+        "updatedAt": "2024-10-23T14:17:27.000Z"
+    },
+    {
+        "columns": [
+            {
+                "label": "Name",
+                "order": 1,
+                "enabled": true,
+                "accessor": "name"
+            },
+            {
+                "label": "Status",
+                "order": 2,
+                "enabled": true,
+                "accessor": "status"
+            }
+        ],
+        "id": "55297a20-ab36-11ef-b7e0-ad9408abe2df",
+        "name": "Template Copy",
+        "description": "TCT",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": null,
+        "query": "SELECT name, status FROM inspectionTemplate;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2024-11-25T14:05:31.000Z",
+        "updatedAt": "2024-11-25T14:05:31.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Work Order Number",
+                "order": 1,
+                "enabled": true,
+                "accessor": "workOrderNumber"
+            },
+            {
+                "type": "TEXT",
+                "label": "Description",
+                "order": 2,
+                "enabled": true,
+                "accessor": "description"
+            },
+            {
+                "type": "TEXT",
+                "label": "Start Date",
+                "order": 3,
+                "enabled": true,
+                "accessor": "startDate"
+            },
+            {
+                "type": "TEXT",
+                "label": "End Date",
+                "order": 4,
+                "enabled": true,
+                "accessor": "endDate"
+            },
+            {
+                "type": "TEXT",
+                "label": "Status",
+                "order": 5,
+                "enabled": true,
+                "accessor": "status"
+            },
+            {
+                "type": "TEXT",
+                "label": "Customer Name",
+                "order": 6,
+                "enabled": true,
+                "accessor": "customerName"
+            },
+            {
+                "type": "TEXT",
+                "label": "Ship To Name",
+                "order": 7,
+                "enabled": true,
+                "accessor": "shipToName"
+            }
+        ],
+        "id": "5fa6fa2d-6b0a-4d77-a2d6-654d894f2264",
+        "name": "all work orders",
+        "description": "all work orders",
+        "showSidebar": false,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "all work orders",
+        "query": "\nSELECT  wo.workOrderNumber,\n        wo.description,\n        wo.startDate,\n        wo.endDate,\n        wos.name        AS status,\n        c.customerName  AS customerName,\n        cl.shipToName   AS shipToName\nFROM    secure_workOrder wo\nJOIN    workOrderStatus     wos ON wo.workOrderStatusId = wos.id\nJOIN    secure_customer     c   ON wo.customerId        = c.id\nLEFT JOIN secure_customerLocation cl ON wo.customerLocationId = cl.id\nWHERE   wo.isInternal = 0;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-03-07T19:47:34.000Z",
+        "updatedAt": "2025-03-07T19:47:34.000Z"
+    },
+    {
+        "columns": [
+            {
+                "label": "Test",
+                "order": 1,
+                "enabled": true,
+                "accessor": "test"
+            }
+        ],
+        "id": "65f99870-8fdf-11ef-b67c-cdb7c425884c",
+        "name": "Delete Report",
+        "description": "Report Delete",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "test",
+        "query": "SELECT 'test';",
+        "context": "GLOBAL",
+        "createdBy": null,
+        "createdAt": "2024-10-21T19:05:12.000Z",
+        "updatedAt": "2024-10-22T12:16:42.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "PERCENTAGE",
+                "label": "Template_count",
+                "order": 1,
+                "enabled": true,
+                "accessor": "template_count",
+                "hasTotal": true
+            }
+        ],
+        "id": "69728470-7c08-11ef-9c88-ab21974af347",
+        "name": "Amount of templ",
+        "description": "Amount of templates",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "How many templates, ordered by name",
+        "query": "SELECT COUNT(*) as template_count FROM inspectionTemplate ORDER BY name;",
+        "context": "GLOBAL",
+        "createdBy": null,
+        "createdAt": "2024-09-26T13:08:24.000Z",
+        "updatedAt": "2026-02-04T18:15:13.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "workTimeTypeId",
+                "order": "1",
+                "enabled": true,
+                "accessor": "workTimeTypeId"
+            },
+            {
+                "type": "TEXT",
+                "label": "crewWorkDayId",
+                "order": "2",
+                "enabled": true,
+                "accessor": "crewWorkDayId"
+            },
+            {
+                "type": "TEXT",
+                "label": "employeeId",
+                "order": "3",
+                "enabled": true,
+                "accessor": "employeeId"
+            },
+            {
+                "type": "TEXT",
+                "label": "workTimeIds",
+                "order": "4",
+                "enabled": true,
+                "accessor": "workTimeIds"
+            }
+        ],
+        "id": "6c70d8e9-960d-4a73-9d3e-9d031a9dbc67",
+        "name": "Duplicated WTTs",
+        "description": "Duplicated WTTs",
+        "showSidebar": true,
+        "isInternal": true,
+        "showPeriodSelector": false,
+        "prompt": null,
+        "query": "SELECT \n    workTimeTypeId, \n    crewWorkDayId, \n    employeeId, \n    COUNT(*) AS count,\n    GROUP_CONCAT(id ORDER BY id SEPARATOR ', ') AS workTimeIds\nFROM workTime\nGROUP BY workTimeTypeId, crewWorkDayId, employeeId\nHAVING COUNT(*) > 1;\n",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-08-07T16:38:19.000Z",
+        "updatedAt": "2025-08-11T13:20:37.000Z"
+    },
+    {
+        "columns": [
+            {
+                "label": "Work Order Number",
+                "order": 1,
+                "enabled": true,
+                "accessor": "workOrderNumber"
+            },
+            {
+                "type": "HTML",
+                "label": "Description",
+                "order": 2,
+                "enabled": true,
+                "accessor": "description"
+            },
+            {
+                "label": "Start Date",
+                "order": 3,
+                "enabled": true,
+                "accessor": "startDate"
+            },
+            {
+                "label": "End Date",
+                "order": 4,
+                "enabled": true,
+                "accessor": "endDate"
+            },
+            {
+                "label": "Customer Name",
+                "order": 5,
+                "enabled": true,
+                "accessor": "customerName"
+            },
+            {
+                "label": "Ship To Name",
+                "order": 6,
+                "enabled": true,
+                "accessor": "shipToName"
+            }
+        ],
+        "id": "73261420-9add-11ef-8aea-37cc4d6d5082",
+        "name": "Desc Bug",
+        "description": "Description Bug",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "New Report!",
+        "query": "SELECT wo.workOrderNumber,\n        wo.description,\n        wo.startDate,\n        wo.endDate,\n        c.customerName  AS customerName,\n        cl.shipToName   AS shipToName\nFROM secure_workOrder wo\nLEFT JOIN secure_customer         c  ON wo.customerId        = c.id\nLEFT JOIN secure_customerLocation cl ON wo.customerLocationId = cl.id;",
+        "context": "WORKORDER",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2024-11-04T18:48:58.000Z",
+        "updatedAt": "2025-03-05T15:07:15.000Z"
+    },
+    {
+        "columns": [
+            {
+                "label": "Work Order Number",
+                "order": 1,
+                "enabled": true,
+                "accessor": "workOrderNumber"
+            },
+            {
+                "label": "Description",
+                "order": 2,
+                "enabled": true,
+                "accessor": "description"
+            },
+            {
+                "label": "Customer Name",
+                "order": 3,
+                "enabled": true,
+                "accessor": "customerName"
+            }
+        ],
+        "id": "75dc8fd0-8fe0-11ef-b67c-cdb7c425884c",
+        "name": "Deleted Report",
+        "description": "Delete",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "TEST DB",
+        "query": "SELECT wo.workOrderNumber,\n        wo.description,\n        c.customerName AS customerName\nFROM secure_workOrder wo\nLEFT JOIN secure_customer c ON wo.customerId = c.id;",
+        "context": "WORKORDER",
+        "createdBy": null,
+        "createdAt": "2024-10-21T19:12:48.000Z",
+        "updatedAt": "2025-02-13T15:59:33.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "WO_LINK",
+                "label": "Work Order Number",
+                "order": 1,
+                "enabled": true,
+                "accessor": "workOrderNumber"
+            },
+            {
+                "type": "TEXT",
+                "label": "Work Order Id",
+                "order": "2",
+                "accessor": "workOrderId"
+            }
+        ],
+        "id": "7c053a40-776e-11ef-a9e2-25e455f9efa9",
+        "name": "WOs with WT",
+        "description": "WOs with WT",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "list the work orders (work order number) that have at least one work time created",
+        "query": "SELECT DISTINCT wo.workOrderNumber, wo.id as workOrderId\nFROM   secure_workOrder wo\nJOIN   crew        ON wo.id = crew.workOrderId\nJOIN   crewWorkDay ON crew.id = crewWorkDay.crewId\nJOIN   workTime    ON crewWorkDay.id = workTime.crewWorkDayId;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2024-09-20T16:36:28.000Z",
+        "updatedAt": "2025-10-06T14:55:40.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Employee  Name",
+                "order": 1,
+                "enabled": true,
+                "accessor": "Employee Name"
+            },
+            {
+                "type": "DATE",
+                "label": "Date",
+                "order": 2,
+                "enabled": true,
+                "accessor": "Date",
+                "dateFilterAccessor": true
+            },
+            {
+                "type": "TEXT",
+                "label": "Work  Order  Number",
+                "order": 3,
+                "enabled": true,
+                "accessor": "Work Order Number"
+            },
+            {
+                "type": "NUMBER",
+                "label": "Regular  Time",
+                "order": 4,
+                "total": 287710.49337014183,
+                "enabled": true,
+                "accessor": "Regular Time",
+                "hasTotal": true
+            },
+            {
+                "type": "NUMBER",
+                "label": "Over Time",
+                "order": 5,
+                "total": 126904.80025934988,
+                "enabled": true,
+                "accessor": "OverTime",
+                "hasTotal": true
+            },
+            {
+                "type": "NUMBER",
+                "label": "Double  Time",
+                "order": 6,
+                "total": 58467.80001146346,
+                "enabled": true,
+                "accessor": "Double Time",
+                "hasTotal": true
+            },
+            {
+                "type": "NUMBER",
+                "label": "Total  Hours",
+                "order": 7,
+                "total": 473083.0936409552,
+                "enabled": true,
+                "accessor": "Total Hours",
+                "hasTotal": true
+            }
+        ],
+        "id": "8c44d3b9-8024-4649-ab49-fbd26c50127f",
+        "name": "Payroll v3",
+        "description": null,
+        "showSidebar": true,
+        "isInternal": true,
+        "showPeriodSelector": false,
+        "prompt": "create a report that will contains all WorkTimes and Travel Times per user and date of the work times, so group all user work times and travel time per date, add a column to show the work order number where those times where added, and for the date display the weekday (for example mm/dd/yyyy ddd), and for the user show name and last name in the same column called Employee Name Then show column for Regular Time, for OverTime and Double Time, but the data in those columns needs to be calculated the following way, sum all time hours for the day and: - all hours, with a date on a Sunday, will be Double Time - all hours, with a date that is a weekday or Saturday, under or equal 8 hours would be Regular Time - all hours, with a date that is a weekday or Saturday, over 8 hours would be OverTime, and add a new column with the total of hours",
+        "query": "SELECT TRIM(CONCAT(COALESCE(CONVERT(e.firstName USING utf8mb4),''),' ',COALESCE(CONVERT(e.lastName USING utf8mb4),''))) AS `Employee Name`, DATE_FORMAT(te.date, '%m/%d/%Y %a') AS `Date`, GROUP_CONCAT(DISTINCT te.workOrderNumber ORDER BY te.workOrderNumber SEPARATOR ', ') AS `Work Order Number`, CASE WHEN DAYOFWEEK(te.date)=1 THEN 0 ELSE LEAST(SUM(te.hours),8) END AS `Regular Time`, CASE WHEN DAYOFWEEK(te.date)=1 THEN 0 ELSE GREATEST(SUM(te.hours)-8,0) END AS `OverTime`, CASE WHEN DAYOFWEEK(te.date)=1 THEN SUM(te.hours) ELSE 0 END AS `Double Time`, SUM(te.hours) AS `Total Hours` FROM ( SELECT wt.employeeId, cwd.date, w.workOrderNumber, wt.hours FROM workTime wt LEFT JOIN crewWorkDay cwd ON wt.crewWorkDayId = cwd.id LEFT JOIN crew c ON cwd.crewId = c.id JOIN secure_workOrder w ON c.workOrderId = w.id AND w.isInternal = 0 JOIN secure_employee e1 ON e1.id = wt.employeeId AND e1.isInternal = 0 WHERE wt.hours IS NOT NULL UNION ALL SELECT tt.employeeId, cwd.date, w.workOrderNumber, tt.hours FROM travelTime tt LEFT JOIN crewWorkDay cwd ON tt.crewWorkDayId = cwd.id LEFT JOIN crew c ON cwd.crewId = c.id JOIN secure_workOrder w ON c.workOrderId = w.id AND w.isInternal = 0 JOIN secure_employee e2 ON e2.id = tt.employeeId AND e2.isInternal = 0 WHERE tt.hours IS NOT NULL ) te JOIN secure_employee e ON e.id = te.employeeId AND e.isInternal = 0 WHERE te.date IS NOT NULL GROUP BY te.employeeId, te.date ORDER BY CONVERT(e.lastName USING utf8mb4), CONVERT(e.firstName USING utf8mb4), te.date;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-10-14T15:07:21.000Z",
+        "updatedAt": "2025-11-04T10:23:37.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Work Order Number",
+                "order": 1,
+                "enabled": true,
+                "accessor": "workOrderNumber"
+            },
+            {
+                "type": "TEXT",
+                "label": "Description",
+                "order": 2,
+                "enabled": true,
+                "accessor": "description"
+            },
+            {
+                "type": "TEXT",
+                "label": "Start Date",
+                "order": 3,
+                "enabled": true,
+                "accessor": "startDate"
+            },
+            {
+                "type": "TEXT",
+                "label": "End Date",
+                "order": 4,
+                "enabled": true,
+                "accessor": "endDate"
+            },
+            {
+                "type": "TEXT",
+                "label": "C U R R E N C Y  A T T R I B U T E  T E S T 1",
+                "order": 5,
+                "enabled": true,
+                "accessor": "CURRENCY ATTRIBUTE TEST 1"
+            },
+            {
+                "type": "TEXT",
+                "label": "T E X T  A T T R I B U T E  T E S T",
+                "order": 6,
+                "enabled": true,
+                "accessor": "TEXT ATTRIBUTE TEST"
+            },
+            {
+                "type": "TEXT",
+                "label": "N U M B E R  A T T R I B U T E  T E S T",
+                "order": 7,
+                "enabled": true,
+                "accessor": "NUMBER ATTRIBUTE TEST"
+            }
+        ],
+        "id": "934cf58c-9191-4783-a93d-60fc03641ef4",
+        "name": "Null?",
+        "description": "Null?",
+        "showSidebar": false,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "Return a list of work orders, all returned data associated must be null",
+        "query": "\nSELECT NULL AS workOrderNumber,\n       NULL AS description,\n       NULL AS startDate,\n       NULL AS endDate,\n       NULL AS `CURRENCY ATTRIBUTE TEST 1`,\n       NULL AS `TEXT ATTRIBUTE TEST`,\n       NULL AS `NUMBER ATTRIBUTE TEST`\nFROM   secure_workOrder\nWHERE  isInternal = FALSE;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-04-11T14:29:21.000Z",
+        "updatedAt": "2025-04-11T14:29:21.000Z"
+    },
+    {
+        "columns": [
+            {
+                "label": "Customer Name",
+                "order": 1,
+                "enabled": true,
+                "accessor": "customerName"
+            },
+            {
+                "label": "Address",
+                "order": 2,
+                "enabled": true,
+                "accessor": "address"
+            },
+            {
+                "type": "NUMBER",
+                "label": "State",
+                "order": 3,
+                "enabled": true,
+                "accessor": "state",
+                "hasTotal": true
+            },
+            {
+                "label": "City Bro",
+                "order": 4,
+                "enabled": true,
+                "accessor": "city"
+            },
+            {
+                "label": "Zip Code",
+                "order": 5,
+                "enabled": false,
+                "accessor": "zipCode"
+            },
+            {
+                "label": "Country Code",
+                "order": 6,
+                "enabled": true,
+                "accessor": "countryCode"
+            },
+            {
+                "label": "Phone",
+                "order": 7,
+                "enabled": true,
+                "accessor": "phone"
+            },
+            {
+                "label": "Fax No",
+                "order": 8,
+                "enabled": true,
+                "accessor": "faxNo"
+            },
+            {
+                "label": "Email",
+                "order": 9,
+                "enabled": true,
+                "accessor": "email"
+            }
+        ],
+        "id": "93e454d0-776d-11ef-a9e2-25e455f9efa9",
+        "name": "All customers",
+        "description": "All customers",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "All customers",
+        "query": "\nSELECT  customerName AS customerName,\n        address,\n        city,\n        state,\n        zipCode,\n        countryCode,\n        phone,\n        faxNo,\n        email\nFROM    secure_customer;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2024-09-20T16:29:58.000Z",
+        "updatedAt": "2025-08-18T18:48:15.000Z"
+    },
+    {
+        "columns": [
+            {
+                "label": "Date",
+                "order": 1,
+                "enabled": true,
+                "accessor": "date"
+            },
+            {
+                "label": "Template_name",
+                "order": 2,
+                "enabled": true,
+                "accessor": "template_name"
+            },
+            {
+                "label": "Run_count",
+                "order": 3,
+                "enabled": true,
+                "accessor": "run_count"
+            }
+        ],
+        "id": "958f99f0-7f67-11ef-a741-eb0c7d60cdb8",
+        "name": "Dubious result2",
+        "description": "Missing asset name and... run count?",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "Create a report including inspections and a count of how many times it has been run. Join Template and Asset name when appropiate",
+        "query": "SELECT i.id   AS inspection_id,\n        i.date,\n        it.name AS template_name,\n        COUNT(i.id) AS run_count\nFROM inspection i\nLEFT JOIN inspectionTemplateWorkOrder itwo ON i.inspectionTemplateWorkOrderId = itwo.id\nLEFT JOIN inspectionTemplate it           ON itwo.inspectionTemplateId = it.id\nGROUP BY i.id, i.date, it.name;",
+        "context": "WORKORDER",
+        "createdBy": null,
+        "createdAt": "2024-09-30T20:07:13.000Z",
+        "updatedAt": "2024-10-23T14:17:27.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Name",
+                "order": 1,
+                "enabled": true,
+                "accessor": "name"
+            },
+            {
+                "type": "NUMBER",
+                "label": "Email",
+                "order": 2,
+                "enabled": true,
+                "accessor": "email",
+                "hasTotal": true
+            },
+            {
+                "type": "DATETIME",
+                "label": "Last Activity",
+                "order": 3,
+                "enabled": true,
+                "accessor": "lastActivity"
+            }
+        ],
+        "id": "97c7332f-c553-407f-b791-85f26c3e2d91",
+        "name": "User activity",
+        "description": "User activity report",
+        "showSidebar": true,
+        "isInternal": true,
+        "showPeriodSelector": false,
+        "prompt": "necesito una lista de todos los usuarios mostrnado name, email, y last activity",
+        "query": "\nSELECT  CONCAT(u.firstName, ' ', u.lastName) AS name,\n        u.email                                AS email,\n        u.lastActivity\nFROM    secure_user u\nORDER BY name;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-06-14T15:55:59.000Z",
+        "updatedAt": "2025-08-18T18:52:05.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Name",
+                "order": 1,
+                "enabled": true,
+                "accessor": "name"
+            },
+            {
+                "type": "TEXT",
+                "label": "Model Number",
+                "order": 2,
+                "enabled": true,
+                "accessor": "modelNumber"
+            },
+            {
+                "type": "TEXT",
+                "label": "Serial Number",
+                "order": 3,
+                "enabled": true,
+                "accessor": "serialNumber"
+            },
+            {
+                "type": "TEXT",
+                "label": "Manufacturer",
+                "order": 4,
+                "enabled": true,
+                "accessor": "manufacturer"
+            },
+            {
+                "type": "TEXT",
+                "label": "Cores",
+                "order": 5,
+                "enabled": true,
+                "accessor": "Cores"
+            },
+            {
+                "type": "TEXT",
+                "label": "Certification",
+                "order": 6,
+                "enabled": true,
+                "accessor": "Certification"
+            },
+            {
+                "type": "TEXT",
+                "label": "Wattage",
+                "order": 7,
+                "enabled": true,
+                "accessor": "Wattage"
+            },
+            {
+                "type": "TEXT",
+                "label": "Memory",
+                "order": 8,
+                "enabled": true,
+                "accessor": "Memory"
+            },
+            {
+                "type": "TEXT",
+                "label": "Clock  Speed",
+                "order": 9,
+                "enabled": true,
+                "accessor": "Clock Speed"
+            },
+            {
+                "type": "TEXT",
+                "label": "Asset Type",
+                "order": 10,
+                "enabled": true,
+                "accessor": "assetType"
+            }
+        ],
+        "id": "9bc15dd8-9733-4171-82bf-51d4ce114aaa",
+        "name": "DynAttr",
+        "description": null,
+        "showSidebar": false,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "List all assets including dynamic attributes",
+        "query": "SELECT asset.name, asset.modelNumber, asset.serialNumber, asset.manufacturer, JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Cores\"')) AS Cores, JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Certification\"')) AS Certification, JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Wattage\"')) AS Wattage, JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Memory\"')) AS Memory, JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Clock Speed\"')) AS `Clock Speed`, assetType.name AS assetType FROM asset LEFT JOIN assetType ON asset.assetTypeId = assetType.id;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-04-11T19:25:55.000Z",
+        "updatedAt": "2025-04-11T19:25:55.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "DATE",
+                "label": "Start Date",
+                "order": 1,
+                "enabled": true,
+                "accessor": "Start date",
+                "dateFilterAccessor": false
+            },
+            {
+                "type": "DATE",
+                "label": "End Date",
+                "order": 2,
+                "enabled": true,
+                "accessor": "End date",
+                "dateFilterAccessor": true
+            },
+            {
+                "type": "TEXT",
+                "label": "[ T E S T]  Optional  Currency",
+                "order": 3,
+                "enabled": true,
+                "accessor": "[TEST] Optional Currency",
+                "dateFilterAccessor": false
+            },
+            {
+                "type": "TEXT",
+                "label": "[ T E S T]  Optional  Text",
+                "order": 4,
+                "enabled": true,
+                "accessor": "[TEST] Optional Text"
+            }
+        ],
+        "id": "9e997502-7d56-4b27-bfd6-2c5aecb5bbba",
+        "name": "Two Date Columns",
+        "description": null,
+        "showSidebar": false,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "Start date, end date",
+        "query": "SELECT w.startDate AS `Start date`, w.endDate AS `End date`, JSON_UNQUOTE(JSON_EXTRACT(w.dynamicAttributes,'$.\"[TEST] Optional Currency\"')) AS `[TEST] Optional Currency`, JSON_UNQUOTE(JSON_EXTRACT(w.dynamicAttributes,'$.\"[TEST] Optional Text\"')) AS `[TEST] Optional Text` FROM secure_workOrder w WHERE w.isInternal = false;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-09-05T17:23:05.000Z",
+        "updatedAt": "2025-09-09T16:43:16.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "First Name",
+                "order": 1,
+                "total": 0,
+                "enabled": true,
+                "accessor": "firstName",
+                "hasTotal": false
+            },
+            {
+                "type": "TEXT",
+                "label": "Last Name",
+                "order": 2,
+                "enabled": true,
+                "accessor": "lastName"
+            },
+            {
+                "type": "TEXT",
+                "label": "Role",
+                "order": 3,
+                "enabled": true,
+                "accessor": "role"
+            },
+            {
+                "type": "TEXT",
+                "label": "Is Lead",
+                "order": 4,
+                "total": 1,
+                "enabled": true,
+                "accessor": "isLead",
+                "hasTotal": false
+            },
+            {
+                "type": "TEXT",
+                "label": "Start Date",
+                "order": 5,
+                "enabled": true,
+                "accessor": "startDate"
+            },
+            {
+                "type": "TEXT",
+                "label": "End Date",
+                "order": 6,
+                "enabled": true,
+                "accessor": "endDate"
+            },
+            {
+                "type": "TEXT",
+                "label": "Work Order Number",
+                "order": 7,
+                "enabled": true,
+                "accessor": "workOrderNumber"
+            }
+        ],
+        "id": "a2072320-ea0c-4669-b76c-5b407dc66ff1",
+        "name": "Crew List",
+        "description": null,
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "List All Crew History, even hidden one\n",
+        "query": "SELECT e.firstName,e.lastName,er.name AS role,ec.isLead,ec.startDate,ec.endDate,wo.workOrderNumber FROM employeeCrew ec JOIN crew c ON ec.crewId=c.id JOIN secure_workOrder wo ON c.workOrderId=wo.id JOIN secure_employee e ON ec.employeeId=e.id LEFT JOIN employeeRole er ON ec.employeeRoleId=er.id WHERE e.isInternal=0 AND wo.isInternal=0;",
+        "context": "WORKORDER",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-07-25T18:57:51.000Z",
+        "updatedAt": "2026-02-04T18:20:00.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "PERCENTAGE",
+                "label": "C U R R E N C Y  A T T R I B U T E  T E S T 1",
+                "order": 1,
+                "enabled": true,
+                "accessor": "CURRENCY ATTRIBUTE TEST 1",
+                "hasTotal": true
+            },
+            {
+                "type": "TEXT",
+                "label": "T E X T  A T T R I B U T E  T E S T",
+                "order": 2,
+                "enabled": true,
+                "accessor": "TEXT ATTRIBUTE TEST"
+            },
+            {
+                "type": "PERCENTAGE",
+                "label": "N U M B E R  A T T R I B U T E  T E S T",
+                "order": 3,
+                "total": 0,
+                "enabled": true,
+                "accessor": "NUMBER ATTRIBUTE TEST",
+                "hasTotal": true
+            }
+        ],
+        "id": "a8db8051-b34d-4b17-ab4f-af3eefdb1562",
+        "name": "test wo dyn attrs",
+        "description": "test wo dyn attrs",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "all work orders showing only dynamic attributes",
+        "query": "\nSELECT  JSON_UNQUOTE(JSON_EXTRACT(wo.dynamicAttributes, '$.\"CURRENCY ATTRIBUTE TEST 1\"')) AS `CURRENCY ATTRIBUTE TEST 1`,\n        JSON_UNQUOTE(JSON_EXTRACT(wo.dynamicAttributes, '$.\"TEXT ATTRIBUTE TEST\"'))       AS `TEXT ATTRIBUTE TEST`,\n        JSON_UNQUOTE(JSON_EXTRACT(wo.dynamicAttributes, '$.\"NUMBER ATTRIBUTE TEST\"'))     AS `NUMBER ATTRIBUTE TEST`\nFROM    secure_workOrder wo\nWHERE   wo.isInternal = FALSE;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-04-05T22:40:08.000Z",
+        "updatedAt": "2026-02-04T18:15:49.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Customer Name",
+                "order": 1,
+                "total": 344.7894736842105,
+                "enabled": true,
+                "accessor": "customerName",
+                "hasTotal": false
+            },
+            {
+                "label": "Address",
+                "order": 2,
+                "enabled": true,
+                "accessor": "address"
+            },
+            {
+                "label": "City",
+                "order": 3,
+                "enabled": true,
+                "accessor": "city"
+            },
+            {
+                "label": "State",
+                "order": 4,
+                "enabled": true,
+                "accessor": "state"
+            },
+            {
+                "label": "Zip Code",
+                "order": 5,
+                "enabled": true,
+                "accessor": "zipCode"
+            },
+            {
+                "label": "Country Code",
+                "order": 6,
+                "enabled": true,
+                "accessor": "countryCode"
+            },
+            {
+                "label": "Phone",
+                "order": 7,
+                "enabled": true,
+                "accessor": "phone"
+            },
+            {
+                "label": "Fax No",
+                "order": 8,
+                "enabled": true,
+                "accessor": "faxNo"
+            },
+            {
+                "label": "Email",
+                "order": 9,
+                "enabled": true,
+                "accessor": "email"
+            }
+        ],
+        "id": "acef4400-7c34-11ef-bb76-315e426c360f",
+        "name": "Active Customer",
+        "description": null,
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "report of all active customers",
+        "query": "\nSELECT  customerName,\n        address,\n        city,\n        state,\n        zipCode,\n        countryCode,\n        phone,\n        faxNo,\n        email\nFROM    secure_customer\nWHERE   isActive = 1;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2024-09-26T18:25:15.000Z",
+        "updatedAt": "2026-02-04T18:16:26.000Z"
+    },
+    {
+        "columns": [
+            {
+                "label": "Date",
+                "order": 1,
+                "enabled": true,
+                "accessor": "date"
+            },
+            {
+                "label": "Status",
+                "order": 2,
+                "enabled": true,
+                "accessor": "status"
+            },
+            {
+                "label": "Template_name",
+                "order": 3,
+                "enabled": true,
+                "accessor": "template_name"
+            },
+            {
+                "label": "Asset_name",
+                "order": 4,
+                "enabled": true,
+                "accessor": "asset_name"
+            },
+            {
+                "label": "Completed At",
+                "order": 5,
+                "enabled": true,
+                "accessor": "completedAt"
+            }
+        ],
+        "id": "b2a78710-7f66-11ef-a741-eb0c7d60cdb8",
+        "name": "Dubious results",
+        "description": "rich text spam",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "Inspections with their date, asset name, template name and all relevant information including status",
+        "query": "SELECT inspection.date,\n        inspection.status,\n        inspectionTemplate.name AS template_name,\n        wo.description          AS asset_name,\n        inspection.completedAt\nFROM inspection\nLEFT JOIN crewWorkDay ON inspection.crewWorkDayId = crewWorkDay.id\nLEFT JOIN crew        ON crewWorkDay.crewId = crew.id\nLEFT JOIN secure_workOrder wo ON crew.workOrderId = wo.id\nLEFT JOIN inspectionTemplateWorkOrder ON inspection.inspectionTemplateWorkOrderId = inspectionTemplateWorkOrder.id\nLEFT JOIN inspectionTemplate ON inspectionTemplateWorkOrder.inspectionTemplateId = inspectionTemplate.id;",
+        "context": "WORKORDER",
+        "createdBy": null,
+        "createdAt": "2024-09-30T20:00:53.000Z",
+        "updatedAt": "2024-10-23T14:17:27.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Work Order Number",
+                "order": 1,
+                "enabled": true,
+                "accessor": "WorkOrderNumber"
+            },
+            {
+                "type": "TEXT",
+                "label": "Description",
+                "order": 2,
+                "enabled": true,
+                "accessor": "Description"
+            },
+            {
+                "type": "TEXT",
+                "label": "Start Date",
+                "order": 3,
+                "enabled": true,
+                "accessor": "StartDate"
+            },
+            {
+                "type": "TEXT",
+                "label": "End Date",
+                "order": 4,
+                "enabled": true,
+                "accessor": "EndDate"
+            },
+            {
+                "type": "TEXT",
+                "label": "Status",
+                "order": 5,
+                "enabled": true,
+                "accessor": "Status"
+            },
+            {
+                "type": "TEXT",
+                "label": "C U R R E N C Y  A T T R I B U T E  T E S T 1",
+                "order": 6,
+                "enabled": true,
+                "accessor": "CURRENCY ATTRIBUTE TEST 1"
+            },
+            {
+                "type": "TEXT",
+                "label": "T E X T  A T T R I B U T E  T E S T",
+                "order": 7,
+                "enabled": true,
+                "accessor": "TEXT ATTRIBUTE TEST"
+            },
+            {
+                "type": "TEXT",
+                "label": "N U M B E R  A T T R I B U T E  T E S T",
+                "order": 8,
+                "enabled": true,
+                "accessor": "NUMBER ATTRIBUTE TEST"
+            }
+        ],
+        "id": "b43ae7fe-8f2e-4b4f-9526-e8beb5b270de",
+        "name": "Internal",
+        "description": "Internal",
+        "showSidebar": false,
+        "isInternal": true,
+        "showPeriodSelector": false,
+        "prompt": "template details",
+        "query": "\nSELECT  wo.workOrderNumber AS WorkOrderNumber,\n        wo.description     AS Description,\n        wo.startDate       AS StartDate,\n        wo.endDate         AS EndDate,\n        wos.name           AS Status,\n        JSON_UNQUOTE(JSON_EXTRACT(wo.dynamicAttributes, '$.\"CURRENCY ATTRIBUTE TEST 1\"')) AS \"CURRENCY ATTRIBUTE TEST 1\",\n        JSON_UNQUOTE(JSON_EXTRACT(wo.dynamicAttributes, '$.\"TEXT ATTRIBUTE TEST\"'))       AS \"TEXT ATTRIBUTE TEST\",\n        JSON_UNQUOTE(JSON_EXTRACT(wo.dynamicAttributes, '$.\"NUMBER ATTRIBUTE TEST\"'))     AS \"NUMBER ATTRIBUTE TEST\"\nFROM    secure_workOrder wo\nLEFT JOIN workOrderStatus wos ON wo.workOrderStatusId = wos.id\nWHERE   wo.isInternal = FALSE;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-04-14T14:30:01.000Z",
+        "updatedAt": "2025-04-14T14:30:01.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Employee",
+                "order": 1,
+                "enabled": true,
+                "accessor": "employee"
+            },
+            {
+                "type": "NUMBER",
+                "label": "Total Weekdays in Period",
+                "order": 2,
+                "enabled": true,
+                "accessor": "totalWeekdaysInPeriod"
+            },
+            {
+                "type": "NUMBER",
+                "label": "Total Weekend Days in Period",
+                "order": 3,
+                "enabled": true,
+                "accessor": "totalWeekendDaysInPeriod"
+            },
+            {
+                "type": "NUMBER",
+                "label": "Total Weekdays With Work/Travel",
+                "order": 4,
+                "enabled": true,
+                "accessor": "totalWeekdaysWithWorkOrTravelTime"
+            },
+            {
+                "type": "NUMBER",
+                "label": "Total Weekend Days With Work/Travel",
+                "order": 5,
+                "enabled": true,
+                "accessor": "totalWeekendDaysWithWorkOrTravelTime"
+            },
+            {
+                "type": "PERCENTAGE",
+                "label": "% Utilized",
+                "order": 6,
+                "total": 0.13386880856760375,
+                "enabled": true,
+                "accessor": "percentUtilized",
+                "hasTotal": true
+            },
+            {
+                "type": "DATE",
+                "label": "Period",
+                "order": 7,
+                "enabled": true,
+                "accessor": "period",
+                "dateFilterAccessor": true
+            }
+        ],
+        "id": "bbab9bb1-01e6-11f1-834f-12ab5300c2a9",
+        "name": "Employee Utilization",
+        "description": "Utilization metrics by employee for weekdays/weekends and worked days within a period.",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": true,
+        "prompt": null,
+        "query": "WITH RECURSIVE period_bounds AS (SELECT COALESCE(CAST(@startDate AS DATE), MIN(workDate)) AS periodStart, COALESCE(CAST(@endDate AS DATE), MAX(workDate)) AS periodEnd, LEAST(COALESCE(CAST(@endDate AS DATE), MAX(workDate)), DATE_ADD(COALESCE(CAST(@startDate AS DATE), MIN(workDate)), INTERVAL 365 DAY)) AS periodEndCapped FROM (SELECT cwd.date AS workDate FROM workTime wt INNER JOIN crewWorkDay cwd ON cwd.id = wt.crewWorkDayId UNION ALL SELECT cwd.date AS workDate FROM travelTime tt INNER JOIN crewWorkDay cwd ON cwd.id = tt.crewWorkDayId) all_dates), calendar AS (SELECT periodStart AS periodDate FROM period_bounds WHERE periodStart IS NOT NULL AND periodEndCapped IS NOT NULL UNION ALL SELECT DATE_ADD(periodDate, INTERVAL 1 DAY) FROM calendar JOIN period_bounds ON 1=1 WHERE periodDate < periodEndCapped), employee_days AS (SELECT employeeId, workDate FROM (SELECT wt.employeeId AS employeeId, cwd.date AS workDate FROM workTime wt INNER JOIN crewWorkDay cwd ON cwd.id = wt.crewWorkDayId UNION ALL SELECT tt.employeeId AS employeeId, cwd.date AS workDate FROM travelTime tt INNER JOIN crewWorkDay cwd ON cwd.id = tt.crewWorkDayId) raw_days JOIN period_bounds pb ON raw_days.workDate BETWEEN pb.periodStart AND pb.periodEndCapped GROUP BY employeeId, workDate), employee_summary AS (SELECT employeeId, COUNT(*) AS totalDaysWorked, SUM(CASE WHEN WEEKDAY(workDate) < 5 THEN 1 ELSE 0 END) AS totalWeekdaysWorked, SUM(CASE WHEN WEEKDAY(workDate) >= 5 THEN 1 ELSE 0 END) AS totalWeekendWorked FROM employee_days GROUP BY employeeId), period_totals AS (SELECT COUNT(*) AS totalDaysInPeriod, SUM(CASE WHEN WEEKDAY(periodDate) < 5 THEN 1 ELSE 0 END) AS totalWeekdaysInPeriod, SUM(CASE WHEN WEEKDAY(periodDate) >= 5 THEN 1 ELSE 0 END) AS totalWeekendDaysInPeriod FROM calendar) SELECT e.id AS employeeId, CONCAT(e.firstName, ' ', e.lastName) AS employee, COALESCE(pt.totalWeekdaysInPeriod, 0) AS totalWeekdaysInPeriod, COALESCE(pt.totalWeekendDaysInPeriod, 0) AS totalWeekendDaysInPeriod, COALESCE(es.totalWeekdaysWorked, 0) AS totalWeekdaysWithWorkOrTravelTime, COALESCE(es.totalWeekendWorked, 0) AS totalWeekendDaysWithWorkOrTravelTime, CASE WHEN COALESCE(pt.totalDaysInPeriod, 0) = 0 THEN 0 ELSE ROUND((COALESCE(es.totalDaysWorked, 0) / pt.totalDaysInPeriod) * 100, 2) END AS percentUtilized, pb.periodStart AS period FROM secure_employee e CROSS JOIN period_bounds pb LEFT JOIN employee_summary es ON es.employeeId = e.id LEFT JOIN period_totals pt ON 1=1 WHERE e.isInternal = false AND e.isActive = true ORDER BY employee;",
+        "context": "GLOBAL",
+        "createdBy": null,
+        "createdAt": "2026-02-04T16:29:52.000Z",
+        "updatedAt": "2026-02-04T18:12:33.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Employee  Name",
+                "order": 1,
+                "enabled": true,
+                "accessor": "Employee Name"
+            },
+            {
+                "type": "DATE",
+                "label": "Date",
+                "order": 2,
+                "enabled": true,
+                "accessor": "Date",
+                "dateFilterAccessor": true
+            },
+            {
+                "type": "TEXT",
+                "label": "Work  Order  Number",
+                "order": 3,
+                "enabled": true,
+                "accessor": "Work Order Number"
+            },
+            {
+                "type": "TEXT",
+                "label": "Location",
+                "order": 4,
+                "enabled": true,
+                "accessor": "Location"
+            },
+            {
+                "type": "TEXT",
+                "label": "Role",
+                "order": 5,
+                "enabled": true,
+                "accessor": "Role"
+            },
+            {
+                "type": "NUMBER",
+                "label": "Regular  Time",
+                "order": 6,
+                "enabled": true,
+                "accessor": "Regular Time"
+            },
+            {
+                "type": "NUMBER",
+                "label": "Over Time",
+                "order": 7,
+                "enabled": true,
+                "accessor": "OverTime"
+            },
+            {
+                "type": "NUMBER",
+                "label": "Double  Time",
+                "order": 8,
+                "enabled": true,
+                "accessor": "Double Time"
+            },
+            {
+                "type": "NUMBER",
+                "label": "Total  Hours",
+                "order": 9,
+                "enabled": true,
+                "accessor": "Total Hours"
+            }
+        ],
+        "id": "bd95aa29-7c70-4190-9c0f-927d73d76eaf",
+        "name": "Payroll LR Report",
+        "description": null,
+        "showSidebar": true,
+        "isInternal": true,
+        "showPeriodSelector": false,
+        "prompt": "create a report that will contains all WorkTimes per user and date of the work times, so group all user work times per date, add a column to show the work order number where those Times where added, the location using only the abbreviation of first letters, the role using abbreviation of first letters, and for the date display the weekday (for example mm/dd/yyyy ddd), and for the user show name and last name in the same column called Employee Name Then show column for Regular Time, for OverTime and Double Time, but the data in those columns needs to be calculated the following way, sum all work time hours for the day and: - all hours, with a date on a Sunday, will be Double Time - all hours, with a date that is a weekday or Saturday, under or equal 8 hours would be Regular Time - all hours, with a date that is a weekday or Saturday, over 8 hours would be OverTime, and add a new column with the total of hours",
+        "query": "SELECT TRIM(CONCAT(COALESCE(se.firstName,''),' ',COALESCE(se.lastName,''))) AS `Employee Name`, cwd.date AS `Date`, swo.workOrderNumber AS `Work Order Number`, CASE WHEN sl.name IS NULL THEN NULL ELSE CONCAT(LEFT(TRIM(sl.name),1),IF(TRIM(sl.name) LIKE '% %',LEFT(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(sl.name),' ',2),' ',-1),1),''),IF(TRIM(sl.name) LIKE '% % %',LEFT(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(sl.name),' ',3),' ',-1),1),''),IF(TRIM(sl.name) LIKE '% % % %',LEFT(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(sl.name),' ',4),' ',-1),1),'')) END AS `Location`, CASE WHEN er.name IS NULL THEN NULL ELSE CONCAT(LEFT(TRIM(er.name),1),IF(TRIM(er.name) LIKE '% %',LEFT(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(er.name),' ',2),' ',-1),1),''),IF(TRIM(er.name) LIKE '% % %',LEFT(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(er.name),' ',3),' ',-1),1),''),IF(TRIM(er.name) LIKE '% % % %',LEFT(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(er.name),' ',4),' ',-1),1),'')) END AS `Role`, CASE WHEN DAYOFWEEK(cwd.date)=1 THEN 0 ELSE LEAST(SUM(COALESCE(wt.hours,0)),8) END AS `Regular Time`, CASE WHEN DAYOFWEEK(cwd.date)=1 THEN 0 ELSE GREATEST(SUM(COALESCE(wt.hours,0))-8,0) END AS `OverTime`, CASE WHEN DAYOFWEEK(cwd.date)=1 THEN SUM(COALESCE(wt.hours,0)) ELSE 0 END AS `Double Time`, SUM(COALESCE(wt.hours,0)) AS `Total Hours` FROM workTime wt JOIN crewWorkDay cwd ON cwd.id=wt.crewWorkDayId JOIN crew c ON c.id=cwd.crewId JOIN secure_workOrder swo ON swo.id=c.workOrderId AND swo.isInternal=0 JOIN secure_employee se ON se.id=wt.employeeId AND se.isInternal=0 LEFT JOIN serviceLocation sl ON sl.id=swo.serviceLocationId LEFT JOIN employeeRole er ON er.id=se.employeeRoleId GROUP BY se.id,cwd.date,swo.id,swo.workOrderNumber,sl.name,er.name;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2026-01-22T17:30:15.000Z",
+        "updatedAt": "2026-01-22T17:34:22.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Employee  Name",
+                "order": 1,
+                "enabled": true,
+                "accessor": "Employee Name"
+            },
+            {
+                "type": "DATE",
+                "label": "Date",
+                "order": 2,
+                "enabled": true,
+                "accessor": "Date",
+                "dateFilterAccessor": true
+            },
+            {
+                "type": "TEXT",
+                "label": "Work  Order  Numbers",
+                "order": 3,
+                "enabled": true,
+                "accessor": "Work Order Number"
+            },
+            {
+                "type": "NUMBER",
+                "label": "Regular  Time",
+                "order": 4,
+                "total": 32,
+                "enabled": true,
+                "accessor": "Regular Time",
+                "hasTotal": false
+            },
+            {
+                "type": "NUMBER",
+                "label": "Over Time",
+                "order": 5,
+                "total": 1,
+                "enabled": true,
+                "accessor": "OverTime",
+                "hasTotal": false
+            },
+            {
+                "type": "NUMBER",
+                "label": "Double  Time",
+                "order": 6,
+                "total": 10,
+                "enabled": true,
+                "accessor": "Double Time",
+                "hasTotal": true
+            },
+            {
+                "type": "NUMBER",
+                "label": "Total  Hours",
+                "order": 7,
+                "total": 316,
+                "enabled": true,
+                "accessor": "Total Hours",
+                "hasTotal": false
+            }
+        ],
+        "id": "bebf169b-119a-4b50-acd9-0b323df60f2b",
+        "name": "Payroll v2",
+        "description": "show payroll using basic payroll rules and show total hours",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "create a report that will contains all WorkTimes per user and date of the work times, so group all user work times per date, add a column to show the work order number where those Times where added, and for the date display the weekday (for example mm/dd/yyyy ddd), and for the user show name and last name in the same column called Employee Name Then show column for Regular Time, for OverTime and Double Time, but the data in those columns needs to be calculated the following way, sum all work time hours for the day and: - all hours, with a date on a Sunday, will be Double Time - all hours, with a date that is a weekday or Saturday, under or equal 8 hours would be Regular Time - all hours, with a date that is a weekday or Saturday, over 8 hours would be OverTime, and add a new column with the total of hours",
+        "query": "SELECT TRIM(CONCAT(COALESCE(CONVERT(se.firstName USING utf8mb4), ''), ' ', COALESCE(CONVERT(se.lastName USING utf8mb4), ''))) AS `Employee Name`, cwd.date AS `Date`, GROUP_CONCAT(DISTINCT swo.workOrderNumber ORDER BY swo.workOrderNumber SEPARATOR ', ') AS `Work Order Number`, CASE WHEN DAYOFWEEK(cwd.date) = 1 THEN 0 ELSE LEAST(SUM(COALESCE(wt.hours, 0)), 8) END AS `Regular Time`, CASE WHEN DAYOFWEEK(cwd.date) = 1 THEN 0 ELSE GREATEST(SUM(COALESCE(wt.hours, 0)) - 8, 0) END AS `OverTime`, CASE WHEN DAYOFWEEK(cwd.date) = 1 THEN SUM(COALESCE(wt.hours, 0)) ELSE 0 END AS `Double Time`, SUM(COALESCE(wt.hours, 0)) AS `Total Hours` FROM workTime wt JOIN crewWorkDay cwd ON cwd.id = wt.crewWorkDayId JOIN crew c ON c.id = cwd.crewId JOIN secure_workOrder swo ON swo.id = c.workOrderId AND swo.isInternal = 0 JOIN secure_employee se ON se.id = wt.employeeId AND se.isInternal = 0 GROUP BY se.id, TRIM(CONCAT(COALESCE(CONVERT(se.firstName USING utf8mb4), ''), ' ', COALESCE(CONVERT(se.lastName USING utf8mb4), ''))), cwd.date;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-10-03T13:37:46.000Z",
+        "updatedAt": "2025-11-04T10:26:45.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "First Name",
+                "order": 1,
+                "enabled": true,
+                "accessor": "FirstName"
+            },
+            {
+                "type": "TEXT",
+                "label": "Last Name",
+                "order": 2,
+                "enabled": true,
+                "accessor": "LastName"
+            },
+            {
+                "type": "TEXT",
+                "label": "Email",
+                "order": 3,
+                "enabled": true,
+                "accessor": "Email"
+            },
+            {
+                "type": "TEXT",
+                "label": "Phone",
+                "order": 4,
+                "enabled": true,
+                "accessor": "Phone"
+            }
+        ],
+        "id": "c02eb7ec-a9e6-4634-acd8-573bd51138f5",
+        "name": "Evil Tobi",
+        "description": "Evil Tobi",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "evil tobi",
+        "query": "SELECT e.firstName  AS FirstName,\n        e.lastName   AS LastName,\n        e.email      AS Email,\n        e.phone      AS Phone\nFROM secure_workOrder wo\nLEFT JOIN crew         ON wo.id = crew.workOrderId\nLEFT JOIN employeeCrew ON crew.id = employeeCrew.crewId\nLEFT JOIN secure_employee e ON employeeCrew.employeeId = e.id\nWHERE e.isInternal = FALSE\n  AND (e.firstName LIKE '%evil%' OR e.lastName LIKE '%tobi%');",
+        "context": "WORKORDER",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-03-04T18:26:10.000Z",
+        "updatedAt": "2025-03-04T18:26:10.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "NUMBER",
+                "label": "Hours",
+                "order": 1,
+                "total": 14.428571428571429,
+                "enabled": true,
+                "accessor": "hours",
+                "hasTotal": true
+            },
+            {
+                "type": "DATETIME",
+                "label": "Start Time",
+                "order": 2,
+                "enabled": true,
+                "accessor": "startTime",
+                "dateFilterAccessor": true
+            },
+            {
+                "type": "DATETIME",
+                "label": "End Time",
+                "order": 3,
+                "enabled": true,
+                "accessor": "endTime",
+                "dateFilterAccessor": true
+            },
+            {
+                "label": "Work Time Type Name",
+                "order": 4,
+                "enabled": true,
+                "accessor": "workTimeTypeName"
+            },
+            {
+                "label": "Employee First Name",
+                "order": 5,
+                "enabled": true,
+                "accessor": "employeeFirstName"
+            },
+            {
+                "label": "Employee Last Name",
+                "order": 6,
+                "enabled": true,
+                "accessor": "employeeLastName"
+            },
+            {
+                "label": "Employee Email",
+                "order": 7,
+                "enabled": true,
+                "accessor": "employeeEmail"
+            },
+            {
+                "label": "Employee Phone",
+                "order": 8,
+                "enabled": true,
+                "accessor": "employeePhone"
+            }
+        ],
+        "id": "c7074de0-776d-11ef-a9e2-25e455f9efa9",
+        "name": "All work times",
+        "description": "All work times",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "All work times",
+        "query": "SELECT workTime.hours,\n        workTime.startTime,\n        workTime.endTime,\n        workTimeType.name AS workTimeTypeName,\n        e.firstName       AS employeeFirstName,\n        e.lastName        AS employeeLastName,\n        e.email           AS employeeEmail,\n        e.phone           AS employeePhone\nFROM workTime\nLEFT JOIN workTimeType   ON workTime.workTimeTypeId = workTimeType.id\nLEFT JOIN secure_employee e ON workTime.employeeId = e.id;",
+        "context": "WORKORDER",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2024-09-20T16:31:24.000Z",
+        "updatedAt": "2026-02-04T18:21:37.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Name",
+                "order": 1,
+                "enabled": true,
+                "accessor": "name"
+            },
+            {
+                "type": "TEXT",
+                "label": "Model Number",
+                "order": 2,
+                "enabled": true,
+                "accessor": "modelNumber"
+            },
+            {
+                "type": "TEXT",
+                "label": "Serial Number",
+                "order": 3,
+                "enabled": true,
+                "accessor": "serialNumber"
+            },
+            {
+                "type": "TEXT",
+                "label": "Manufacturer",
+                "order": 4,
+                "enabled": true,
+                "accessor": "manufacturer"
+            },
+            {
+                "type": "TEXT",
+                "label": "U D",
+                "order": 5,
+                "enabled": true,
+                "accessor": "UD"
+            },
+            {
+                "type": "TEXT",
+                "label": "Custom Attribute",
+                "order": 6,
+                "enabled": true,
+                "accessor": "customAttribute"
+            },
+            {
+                "type": "NUMBER",
+                "label": "H P",
+                "order": 7,
+                "total": 150,
+                "enabled": true,
+                "accessor": "HP",
+                "hasTotal": true
+            },
+            {
+                "type": "TEXT",
+                "label": "Cores",
+                "order": 8,
+                "enabled": true,
+                "accessor": "Cores"
+            },
+            {
+                "type": "TEXT",
+                "label": "Certification",
+                "order": 9,
+                "enabled": true,
+                "accessor": "Certification"
+            },
+            {
+                "type": "NUMBER",
+                "label": "Wattage",
+                "order": 10,
+                "total": 46270,
+                "enabled": true,
+                "accessor": "Wattage",
+                "hasTotal": true
+            },
+            {
+                "type": "TEXT",
+                "label": "Not Req",
+                "order": 11,
+                "enabled": true,
+                "accessor": "Not req"
+            },
+            {
+                "type": "TEXT",
+                "label": "Type 2",
+                "order": 12,
+                "enabled": true,
+                "accessor": "Type 2"
+            },
+            {
+                "type": "TEXT",
+                "label": "Punish  List  Item",
+                "order": 13,
+                "enabled": true,
+                "accessor": "Punish List Item"
+            },
+            {
+                "type": "TEXT",
+                "label": "Type 1",
+                "order": 14,
+                "enabled": true,
+                "accessor": "Type 1"
+            },
+            {
+                "type": "TEXT",
+                "label": "Priority",
+                "order": 15,
+                "enabled": true,
+                "accessor": "Priority"
+            },
+            {
+                "type": "TEXT",
+                "label": "Memory",
+                "order": 16,
+                "enabled": true,
+                "accessor": "Memory"
+            },
+            {
+                "type": "TEXT",
+                "label": "E C100",
+                "order": 17,
+                "enabled": true,
+                "accessor": "EC100"
+            },
+            {
+                "type": "TEXT",
+                "label": "Clock  Speed",
+                "order": 18,
+                "enabled": true,
+                "accessor": "Clock Speed"
+            }
+        ],
+        "id": "d808068c-11a5-4205-ba0b-e29436bbfbaf",
+        "name": "All DA columns",
+        "description": null,
+        "showSidebar": true,
+        "isInternal": true,
+        "showPeriodSelector": false,
+        "prompt": "show me all assets and a column for each dynamic attribute\n",
+        "query": "SELECT asset.name AS name,asset.modelNumber AS modelNumber,asset.serialNumber AS serialNumber,asset.manufacturer AS manufacturer,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"UD\"')) AS UD,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"customAttribute\"')) AS customAttribute,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"HP\"')) AS HP,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Cores\"')) AS Cores,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Certification\"')) AS Certification,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Wattage\"')) AS Wattage,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Not req\"')) AS `Not req`,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Type 2\"')) AS `Type 2`,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Punish List Item\"')) AS `Punish List Item`,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Type 1\"')) AS `Type 1`,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Priority\"')) AS Priority,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Memory\"')) AS Memory,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"EC100\"')) AS EC100,JSON_UNQUOTE(JSON_EXTRACT(asset.dynamicAttributes,'$.\"Clock Speed\"')) AS `Clock Speed` FROM asset;",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-08-18T18:44:58.000Z",
+        "updatedAt": "2025-09-02T12:12:26.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "WO_LINK",
+                "label": "Work Order Number",
+                "order": 1,
+                "enabled": true,
+                "accessor": "workOrderNumber"
+            },
+            {
+                "type": "TEXT",
+                "label": "Description",
+                "order": 2,
+                "enabled": true,
+                "accessor": "description"
+            },
+            {
+                "type": "TEXT",
+                "label": "Work Order Id",
+                "order": "3",
+                "accessor": "workOrderId"
+            }
+        ],
+        "id": "d8fd5c2d-dfbc-4eff-a003-94ce645aab28",
+        "name": "Work order with time",
+        "description": null,
+        "showSidebar": false,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "List all the work orders that have at least one work time added",
+        "query": "SELECT DISTINCT wo.workOrderNumber, wo.description, wo.id as workOrderId FROM secure_workOrder wo WHERE wo.isInternal = 0 AND EXISTS (SELECT 1 FROM workTime wt JOIN crewWorkDay cwd ON wt.crewWorkDayId = cwd.id JOIN crew c ON cwd.crewId = c.id WHERE c.workOrderId = wo.id);",
+        "context": "GLOBAL",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-10-06T15:22:31.000Z",
+        "updatedAt": "2025-10-06T15:25:38.000Z"
+    },
+    {
+        "columns": [
+            {
+                "type": "TEXT",
+                "label": "Description",
+                "order": 1,
+                "enabled": true,
+                "accessor": "description"
+            }
+        ],
+        "id": "de52827e-6259-4e3c-837f-545584dc74ac",
+        "name": "CREW-841",
+        "description": "CREW-841",
+        "showSidebar": false,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "Description",
+        "query": "SELECT description\nFROM secure_workOrder\nWHERE isInternal = 0;",
+        "context": "WORKORDER",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2025-03-04T18:31:46.000Z",
+        "updatedAt": "2025-03-04T18:31:46.000Z"
+    },
+    {
+        "columns": [
+            {
+                "label": "Date",
+                "order": 1,
+                "enabled": true,
+                "accessor": "date"
+            },
+            {
+                "label": "Status",
+                "order": 2,
+                "enabled": true,
+                "accessor": "status"
+            }
+        ],
+        "id": "f96f8670-8fab-11ef-b632-317d41434411",
+        "name": "WOs inspections",
+        "description": "WOs inspections",
+        "showSidebar": true,
+        "isInternal": false,
+        "showPeriodSelector": false,
+        "prompt": "All inspections",
+        "query": "SELECT inspection.date,\n        inspection.status\nFROM inspection\nLEFT JOIN crewWorkDay ON inspection.crewWorkDayId = crewWorkDay.id\nLEFT JOIN crew        ON crewWorkDay.crewId = crew.id;",
+        "context": "WORKORDER",
+        "createdBy": "ff51bbf1-5ecc-11ee-bcd8-8b5e62edd4ad",
+        "createdAt": "2024-10-21T12:57:05.000Z",
+        "updatedAt": "2024-10-21T12:58:40.000Z"
+    }
+]

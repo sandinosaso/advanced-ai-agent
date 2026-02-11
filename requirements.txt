@@ -14,6 +14,8 @@ alembic==1.14.0
 pymysql==1.1.1
 # Required by PyMySQL for MySQL 8 auth (sha256_password / caching_sha2_password)
 cryptography>=41.0.0
+# SQL parser and transpiler with Rust tokenizer for performance
+sqlglot[rs]>=28.0.0
 
 # Mock Data Generation
 faker==33.1.0

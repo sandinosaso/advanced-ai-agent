@@ -2,7 +2,8 @@
 SQL generator node
 """
 
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -10,8 +11,8 @@ from src.agents.sql.state import SQLGraphState
 from src.agents.sql.context import SQLContext
 from src.agents.sql.utils import trace_step
 from src.config.settings import settings
-from src.domain.ontology.formatter import build_where_clauses
-from src.sql.execution.secure_rewriter import rewrite_secure_tables
+from src.domain.ontology.formatter import build_where_clauses, format_domain_context, get_resolution_extra
+from src.sql.execution.secure_rewriter import rewrite_secure_tables, from_secure_view, to_secure_view
 from src.agents.sql.planning import (
     extract_tables_from_join_plan,
     parse_join_path_steps,
@@ -25,23 +26,256 @@ from src.agents.sql.prompt_helpers import (
     build_column_mismatch_example,
     build_display_attributes_examples,
 )
+from src.llm.response_utils import extract_text_from_response
 
 
-def _build_domain_filter_instructions(state: SQLGraphState) -> str:
-    """Build instructions for domain filters in SQL generation prompt"""
+def _validate_select_tables(sql: str) -> None:
+    """
+    Validate that all tables referenced in SELECT are present in FROM/JOIN.
+    Logs a warning if a table is referenced in SELECT but not joined.
+    """
+    if not sql or not sql.strip():
+        return
+    
+    # Extract SELECT clause
+    select_match = re.search(r"\bSELECT\s+(.*?)\s+FROM\s+", sql, re.DOTALL | re.IGNORECASE)
+    if not select_match:
+        return
+    select_clause = select_match.group(1)
+    
+    # Extract table names from SELECT (e.g. "table.column")
+    select_tables = set()
+    for match in re.finditer(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\.[a-zA-Z_]", select_clause):
+        select_tables.add(match.group(1))
+    
+    # Extract tables from FROM/JOIN
+    from_join_tables = set()
+    # Match FROM table or JOIN table (with or without AS alias)
+    for match in re.finditer(
+        r"\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+        sql,
+        re.IGNORECASE
+    ):
+        from_join_tables.add(match.group(1))
+    
+    # Check for missing tables
+    missing_tables = select_tables - from_join_tables
+    if missing_tables:
+        logger.warning(
+            f"SELECT references tables not in FROM/JOIN: {missing_tables}. "
+            f"This will cause 'Unknown column' errors. "
+            f"Make sure template tables are included in join path."
+        )
+
+
+def get_default_table_filter_clauses(selected_tables: List[str], registry: Dict[str, Any]) -> List[str]:
+    """
+    Build WHERE clause fragments from default table filters.
+    
+    Args:
+        selected_tables: List of selected table names
+        registry: Domain registry dictionary
+        
+    Returns:
+        List of WHERE clause strings for tables with default filters
+        
+    Example:
+        For workOrder with isInternal=0: ["workOrder.isInternal = 0"]
+    """
+    if not registry:
+        return []
+    
+    default_filters = registry.get("default_table_filters", {})
+    if not default_filters:
+        return []
+    
+    clauses = []
+    for table in selected_tables:
+        if table in default_filters:
+            filters = default_filters[table]
+            for filter_def in filters:
+                column = filter_def.get("column")
+                value = filter_def.get("value")
+                if column and value is not None:
+                    # Format value based on type
+                    if isinstance(value, bool):
+                        value_str = "true" if value else "false"
+                    elif isinstance(value, str):
+                        value_str = f"'{value}'"
+                    else:
+                        value_str = str(value)
+                    
+                    clause = f"{table}.{column} = {value_str}"
+                    clauses.append(clause)
+    
+    return clauses
+
+
+def _should_skip_default_table_filters(domain_resolutions: List[Dict[str, Any]]) -> bool:
+    """Return True if any resolution has skip_default_table_filters (e.g. user asked for internals/hidden)."""
+    return any(
+        get_resolution_extra(r, "skip_default_table_filters") for r in (domain_resolutions or [])
+    )
+
+
+def _rewrite_sql_from_anchor(sql: str, anchor_table: str) -> str:
+    """
+    If the query does not start from the anchor table, reorder FROM and JOINs
+    so that FROM uses the anchor table. This fixes queries that return too few rows
+    (e.g. FROM user JOIN expense JOIN workOrder -> only rows with expense and user).
+    """
+    if not anchor_table or not sql.strip():
+        return sql
+    anchor_lower = anchor_table.lower()
+    from_match = re.search(r"\bFROM\s+(\w+)\b", sql, re.IGNORECASE)
+    if not from_match:
+        return sql
+    current_from = from_match.group(1)
+    base_from = from_secure_view(current_from)
+    if base_from.lower() == anchor_lower:
+        return sql
+
+    # Find anchor as it may appear in SQL (logical or secure)
+    anchor_in_sql = anchor_table
+    if to_secure_view(anchor_table) != anchor_table:
+        anchor_in_sql = to_secure_view(anchor_table)
+    anchor_in_sql_lower = anchor_in_sql.lower()
+
+    # Split into SELECT, FROM+JOINs, and rest (WHERE, GROUP, ORDER, LIMIT)
+    parts = re.split(r"\b(WHERE|GROUP\s+BY|ORDER\s+BY|LIMIT)\b", sql, maxsplit=1, flags=re.IGNORECASE)
+    main_part = parts[0].strip()
+    rest = (" " + " ".join(parts[1:]).strip()) if len(parts) > 1 else ""
+
+    # Parse JOIN lines: "JOIN table ON condition" or "LEFT JOIN table ON condition"
+    join_pattern = re.compile(
+        r"\b(LEFT\s+JOIN|JOIN)\s+(\w+)\s+ON\s+",
+        re.IGNORECASE
+    )
+    joins_with_conditions: List[Tuple[str, str, str]] = []  # (join_type, table, full_line)
+    pos = 0
+    while True:
+        m = join_pattern.search(main_part, pos)
+        if not m:
+            break
+        join_type, table = m.group(1), m.group(2)
+        start = m.start()
+        end = m.end()
+        # Find end of this ON condition (next JOIN/end of main_part)
+        next_join = join_pattern.search(main_part, end)
+        cond_end = next_join.start() if next_join else len(main_part)
+        cond_part = main_part[end:cond_end].strip()
+        # Trim trailing comment or newline
+        cond_part = re.sub(r"\s*--.*$", "", cond_part).strip()
+        full_line = main_part[start:cond_end].strip()
+        joins_with_conditions.append((join_type, table, full_line))
+        pos = cond_end
+
+    # Find the JOIN that introduces the anchor table
+    anchor_join_idx: Optional[int] = None
+    for i, (_, table, full_line) in enumerate(joins_with_conditions):
+        if table.lower() == anchor_in_sql_lower:
+            anchor_join_idx = i
+            break
+        if from_secure_view(table).lower() == anchor_lower:
+            anchor_join_idx = i
+            break
+    if anchor_join_idx is None:
+        logger.warning(
+            f"Anchor table '{anchor_table}' not found in JOINs; cannot rewrite FROM clause"
+        )
+        return sql
+
+    # Get the condition from the join that introduces anchor; the "other" table is the non-anchor table in the condition
+    _, anchor_join_table, anchor_join_line = joins_with_conditions[anchor_join_idx]
+    cond_match = re.search(r"\bON\s+(.+)$", anchor_join_line, re.DOTALL | re.IGNORECASE)
+    on_condition = cond_match.group(1).strip() if cond_match else ""
+    # Parse "table.col = table.col" or "table.col = table.col AND ..." to get the other table (not anchor)
+    other_table = anchor_join_table
+    for side in re.split(r"\s*=\s*", on_condition, maxsplit=1):
+        dot = re.search(r"(\w+)\.\w+", side.strip())
+        if dot:
+            t = dot.group(1)
+            if t.lower() != anchor_in_sql_lower and from_secure_view(t).lower() != anchor_lower:
+                other_table = t
+                break
+
+    # New first JOIN: JOIN other_table ON condition (anchor is now FROM so we keep condition as-is)
+    new_first_join = f"JOIN {other_table} ON {on_condition}"
+
+    # Build new FROM + JOINs: FROM anchor, then the join that was introducing anchor (as JOIN other ON cond)
+    select_from_part = re.sub(r"\bFROM\s+\w+\b", f"FROM {anchor_in_sql}", main_part, count=1, flags=re.IGNORECASE)
+    select_from_part = re.sub(
+        re.escape(joins_with_conditions[anchor_join_idx][2]),
+        new_first_join,
+        select_from_part,
+        count=1,
+    )
+    # When the anchor was not the first JOIN (anchor_join_idx != 0), the original FROM table is now missing
+    # as a JOIN. Replace the first join line (which linked old FROM to next table) with JOIN current_from ON ...
+    if anchor_join_idx != 0 and joins_with_conditions:
+        first_join_line = joins_with_conditions[0][2]
+        first_join_cond = re.search(r"\bON\s+(.+)$", first_join_line, re.DOTALL | re.IGNORECASE)
+        first_join_cond_str = first_join_cond.group(1).strip() if first_join_cond else "1=1"
+        join_old_from = f"JOIN {current_from} ON {first_join_cond_str}"
+        select_from_part = re.sub(re.escape(first_join_line), join_old_from, select_from_part, count=1)
+
+    result = select_from_part + rest
+    logger.info(f"Rewrote SQL to start from anchor table '{anchor_table}' (was FROM {current_from})")
+    return result
+
+
+def _build_domain_required_joins_section(state: SQLGraphState) -> str:
+    """Build section for domain-required joins that must be included in JOIN_PATH"""
+    domain_joins = state.get("domain_required_joins", [])
+    
+    if not domain_joins:
+        return ""
+    
+    section = "\n\nDOMAIN-REQUIRED JOINS (MUST INCLUDE):\n"
+    section += "The following joins are REQUIRED by domain concepts and MUST be included:\n"
+    for dj in domain_joins:
+        section += f"- JOIN: {dj['condition']} (N:1, 1.00)\n"
+        section += f"  Note: {dj['note']}\n"
+    section += "\nThese joins are MANDATORY. Include them even if not in suggested paths above.\n"
+    section += "They ensure that human-readable names and domain-specific data are available.\n"
+    
+    return section
+
+
+def _build_domain_filter_instructions(state: SQLGraphState, ctx: SQLContext) -> str:
+    """Build instructions for domain filters and calculation hints in SQL generation prompt"""
     domain_resolutions = state.get("domain_resolutions", [])
-    if not domain_resolutions:
-        return ""
-
-    where_clauses = build_where_clauses(domain_resolutions)
-    if not where_clauses:
-        return ""
-
-    instructions = "\n\nDOMAIN FILTER REQUIREMENTS:\n"
-    instructions += "You MUST include these WHERE clause conditions to filter by domain concepts:\n"
-    for clause in where_clauses:
-        instructions += f"  - {clause}\n"
-    instructions += "\nCombine these with AND in your WHERE clause.\n"
+    selected_tables = state.get("tables", [])
+    skip_default = _should_skip_default_table_filters(domain_resolutions)
+    
+    instructions = ""
+    
+    # First, include full domain context (with calculation hints)
+    if domain_resolutions:
+        domain_context = format_domain_context(domain_resolutions)
+        if domain_context:
+            instructions += "\n\n" + domain_context + "\n"
+    
+    # Get domain-based WHERE clauses
+    domain_clauses = build_where_clauses(domain_resolutions) if domain_resolutions else []
+    
+    # Get default table filter clauses (skip when user asked for internals/hidden)
+    default_clauses = []
+    if not skip_default and ctx.domain_ontology and ctx.domain_ontology.registry:
+        default_clauses = get_default_table_filter_clauses(selected_tables, ctx.domain_ontology.registry)
+    
+    # Merge all clauses
+    all_clauses = domain_clauses + default_clauses
+    
+    if skip_default:
+        instructions += "\n\nUser asked to include internal/hidden records. Do NOT add WHERE conditions for isInternal=0 or other default production-only filters (workOrder, employee, customer).\n"
+    
+    if all_clauses:
+        instructions += "\n\nDOMAIN FILTER REQUIREMENTS:\n"
+        instructions += "You MUST include these WHERE clause conditions to filter by domain concepts:\n"
+        for clause in all_clauses:
+            instructions += f"  - {clause}\n"
+        instructions += "\nCombine these with AND in your WHERE clause.\n"
 
     return instructions
 
@@ -81,9 +315,14 @@ def _deduplicate_joins(sql: str) -> str:
     return "\n".join(deduplicated_lines)
 
 
-def _inject_domain_filters(sql: str, domain_resolutions: List[Dict[str, Any]]) -> str:
+def _inject_domain_filters(sql: str, domain_resolutions: List[Dict[str, Any]], default_clauses: List[str] = None) -> str:
     """Inject domain filter WHERE clauses into generated SQL."""
     where_clauses = build_where_clauses(domain_resolutions)
+    
+    # Merge with default table filter clauses
+    if default_clauses:
+        where_clauses.extend(default_clauses)
+    
     if not where_clauses:
         return sql
 
@@ -255,14 +494,28 @@ def generate_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
             followup_where_clause += "- Focus on selecting the NEW data requested in the current question\n"
             followup_where_clause += "=" * 70 + "\n"
 
+    anchor_instruction = ""
+    if state.get("anchor_table"):
+        anchor_instruction = f"""
+PRIMARY TABLE INSTRUCTION:
+- Start your query with: FROM {state['anchor_table']}
+- This is the main entity the user is asking about
+- Join other tables TO this primary table
+
+"""
+
     prompt = f"""
 Generate a MySQL SELECT query using ONLY the columns shown below.
 
 All tables needed for this query (with their actual columns):
 {schema_context}
 {excluded_columns_hint}
+{anchor_instruction}
 CRITICAL RULES:
 - Use ONLY the columns listed above for each table - do NOT guess or invent column names
+- DO NOT select id, createdBy, updatedBy, createdAt, updatedAt columns UNLESS:
+  * The table is workOrder or inspection (these explicitly show id)
+  * The user explicitly asks for IDs or audit fields
 - Follow the JOIN_PATH EXACTLY step by step - do NOT skip any tables or steps
 - Include ALL tables shown above in your FROM/JOIN clauses
 - Do NOT try to join tables directly if JOIN_PATH shows they require a bridge table
@@ -285,24 +538,38 @@ Join plan (follow this EXACTLY, step by step):
 {state['join_plan']}
 
 {"EXPLICIT JOIN STEPS (follow these in order):" + chr(10) + chr(10).join(f"{i+1}. {step}" for i, step in enumerate(join_path_steps)) if join_path_steps else ""}
+{_build_domain_required_joins_section(state)}
 
 IMPORTANT: {bridge_example} Only include bridge tables if they are explicitly listed in the JOIN_PATH above. Do NOT add unnecessary bridge tables when direct foreign keys exist.
-{_build_domain_filter_instructions(state)}
-Return ONLY the SQL query, nothing else.
+{_build_domain_filter_instructions(state, ctx)}
+
+CRITICAL FORMATTING: Return ONLY the SQL query. Do NOT wrap it in markdown code blocks (no ```sql). Just return the raw SQL query text.
 """
 
     logger.info(f"[PROMPT] generate_sql prompt:\n{prompt}")
     response = ctx.llm.invoke(prompt)
-    raw_sql = str(response.content).strip() if hasattr(response, "content") and response.content else ""
+    raw_sql = extract_text_from_response(response).strip()
     if raw_sql.startswith("```"):
         lines = raw_sql.split("\n")
         raw_sql = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
     logger.info(f"Generated SQL (before rewriting): {raw_sql}")
 
+    # Validate that SELECT doesn't reference tables not in FROM/JOIN
+    _validate_select_tables(raw_sql)
+
     domain_resolutions = state.get("domain_resolutions", [])
-    if domain_resolutions:
-        raw_sql = _inject_domain_filters(raw_sql, domain_resolutions)
-        logger.info("Injected domain filters into SQL")
+    skip_default = _should_skip_default_table_filters(domain_resolutions)
+    
+    # Get default table filter clauses (skip when user asked for internals/hidden)
+    default_clauses = []
+    if not skip_default and ctx.domain_ontology and ctx.domain_ontology.registry:
+        selected_tables = state.get("tables", [])
+        default_clauses = get_default_table_filter_clauses(selected_tables, ctx.domain_ontology.registry)
+    
+    # Inject both domain and default table filters
+    if domain_resolutions or default_clauses:
+        raw_sql = _inject_domain_filters(raw_sql, domain_resolutions, default_clauses)
+        logger.info(f"Injected filters into SQL (domain: {len(domain_resolutions)}, default: {len(default_clauses)})")
 
     raw_sql = _deduplicate_joins(raw_sql)
     
@@ -322,6 +589,8 @@ Return ONLY the SQL query, nothing else.
             ]
 
     rewritten_sql = rewrite_secure_tables(raw_sql)
+    if state.get("anchor_table"):
+        rewritten_sql = _rewrite_sql_from_anchor(rewritten_sql, state["anchor_table"])
     logger.info(f"Rewritten SQL (after secure view conversion): {rewritten_sql}")
     state["sql"] = rewritten_sql
     return state

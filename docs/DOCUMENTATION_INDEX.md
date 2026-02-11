@@ -156,7 +156,7 @@ Implementation Files
 - `src/agents/sql/planning/bridge_tables.py` - Bridge discovery logic
 - `src/agents/sql/nodes/join_planner.py` - Join planning with roles
 - `src/agents/sql/nodes/sql_generator.py` - SQL generation with roles
-- `src/utils/path_finder.py` - Path finding with role filtering
+- `src/sql/graph/path_finder.py` - Path finding (JoinPathFinder, used by SQL agent)
 
 ### Metadata Files
 - `artifacts/join_graph_manual.json` - Semantic role definitions

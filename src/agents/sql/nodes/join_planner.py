@@ -20,6 +20,7 @@ from src.agents.sql.planning import (
     get_join_type_hints,
 )
 from src.agents.sql.prompt_helpers import build_bridge_table_example
+from src.llm.response_utils import extract_text_from_response
 
 
 def filter_relationships_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
@@ -86,6 +87,9 @@ def filter_relationships_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraph
         logger.info(f"Auto-adding {len(bridge_tables)} bridge tables: {bridge_tables}")
         selected.update(bridge_tables)
         state["tables"] = list(selected)
+        # Track which tables were auto-added (not explicitly requested)
+        # These will default to LEFT JOIN to prevent data loss if incorrectly identified
+        state["auto_added_bridges"] = list(bridge_tables)
 
     excluded_columns = get_excluded_columns(
         state.get("domain_resolutions", []), ctx.domain_ontology, ctx.join_graph["tables"]
@@ -157,6 +161,14 @@ def plan_joins_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     suggested_paths.sort(key=lambda x: (x["hops"], -x["confidence_sort"]))
     suggested_paths = suggested_paths[:settings.sql_max_suggested_paths]
 
+    # When anchor_table is set, prefer paths that start FROM the anchor so the LLM generates correct FROM clause
+    anchor_table = state.get("anchor_table")
+    if anchor_table and suggested_paths:
+        with_anchor_first = [p for p in suggested_paths if p.get("from") == anchor_table]
+        other_paths = [p for p in suggested_paths if p.get("from") != anchor_table]
+        if with_anchor_first:
+            suggested_paths = with_anchor_first + other_paths
+
     for path in suggested_paths:
         path.pop("confidence_sort", None)
 
@@ -185,6 +197,43 @@ def plan_joins_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
                     path = f"{table} → {template_table}"
                 display_hints += f"  - {path}\n"
             display_hints += "IMPORTANT: Include these joins in your plan to show descriptive names.\n"
+    
+    # Inject required joins from domain terms
+    domain_required_joins = []
+    if ctx.domain_ontology and domain_resolutions:
+        for res in domain_resolutions:
+            required_joins = res.get("required_joins", [])
+            if required_joins:
+                for join_condition in required_joins:
+                    # Parse join condition to extract tables and columns
+                    # Format: "table1.col1 = table2.col2"
+                    domain_required_joins.append({
+                        "condition": join_condition,
+                        "term": res.get("term"),
+                        "note": f"Required by domain term '{res.get('term')}'"
+                    })
+                logger.info(
+                    f"Domain term '{res.get('term')}' requires {len(required_joins)} joins"
+                )
+    
+    if domain_required_joins:
+        state["domain_required_joins"] = domain_required_joins
+    
+    def _build_domain_joins_hint(joins_list):
+        """Build hint section for domain-required joins in join planner prompt"""
+        if not joins_list:
+            return ""
+        hint = "\n\n" + "=" * 70 + "\n"
+        hint += "DOMAIN-REQUIRED JOINS (MUST INCLUDE IN JOIN_PATH)\n"
+        hint += "=" * 70 + "\n"
+        hint += "The following joins are REQUIRED by domain concepts:\n\n"
+        for dj in joins_list:
+            hint += f"- JOIN: {dj['condition']} (N:1, 1.00)\n"
+            hint += f"  Reason: {dj['note']}\n"
+        hint += "\nThese joins are MANDATORY. You MUST include them in your JOIN_PATH.\n"
+        hint += "They ensure that human-readable names and domain-specific data are available.\n"
+        hint += "=" * 70 + "\n"
+        return hint
 
     selected_set = set(selected_tables)
     if ctx.domain_ontology and domain_resolutions:
@@ -207,6 +256,10 @@ def plan_joins_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
                 break
 
     bridge_example = build_bridge_table_example(ctx.join_graph)
+
+    anchor_instruction = ""
+    if state.get("anchor_table"):
+        anchor_instruction = f"\nCRITICAL - ANCHOR TABLE: The first table in JOIN_PATH must be '{state['anchor_table']}'. Start with a step like: - JOIN: {state['anchor_table']}.<column> = <other>.<column> so the generated SQL uses FROM {state['anchor_table']} and returns all rows.\n"
     
     # Get scoped join hints
     scoped_join_hints = build_scoped_join_hints(
@@ -216,7 +269,12 @@ def plan_joins_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     )
     
     # Get join type hints (LEFT JOIN vs JOIN)
-    join_type_hints = get_join_type_hints(selected_tables, ctx.join_graph)
+    # Pass auto-added bridges so they can default to LEFT JOIN
+    join_type_hints = get_join_type_hints(
+        selected_tables, 
+        ctx.join_graph,
+        state.get("auto_added_bridges", [])
+    )
 
     prompt = f"""
 You are planning SQL joins. You MUST ONLY use the allowed relationships.
@@ -234,12 +292,15 @@ These paths are computed by the graph algorithm and include ALL bridge tables ne
 
 Direct and transitive relationships available (for reference only - prefer suggested paths):
 {json.dumps(rels_display[:settings.sql_max_relationships_in_prompt], indent=2)}
+{anchor_instruction}
 {domain_filter_hints}
 {display_hints}
+{_build_domain_joins_hint(domain_required_joins)}
 {join_type_hints}
 {scoped_join_hints}
 Task:
 - PRIMARY: Use the suggested paths above - they are computed by the graph algorithm and are correct
+- CRITICAL (when anchor table is set): The FIRST table in your JOIN_PATH must be the primary entity. Start with a step where that table is on the left (e.g. - JOIN: workOrder.id = crew.workOrderId). This ensures the SQL uses FROM workOrder and returns all rows for that entity; starting from another table (e.g. user or expense) will return too few rows.
 - PREFER DIRECT RELATIONSHIPS: When two tables have a direct foreign key, use it directly (e.g., workTime.employeeId -> employee.id)
 - AVOID UNNECESSARY BRIDGES: Do NOT add bridge tables if a direct path already exists between the tables
   * Example: If workTime has employeeId FK to employee, DO NOT use employeeCrew as a bridge
@@ -268,9 +329,11 @@ NOTES:
 - brief reasoning about path choice
 - explicitly state if using bridge tables and why
 - mention which tables use LEFT JOIN and why
+
+IMPORTANT: Do NOT include SQL code in this response. Only provide the JOIN_PATH and NOTES as specified above.
 """
 
     logger.debug(f"[PROMPT] plan_joins prompt:\n{prompt}")
     response = ctx.llm.invoke(prompt)
-    state["join_plan"] = str(response.content) if hasattr(response, "content") and response.content else ""
+    state["join_plan"] = extract_text_from_response(response)
     return state

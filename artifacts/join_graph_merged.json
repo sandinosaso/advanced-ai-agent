@@ -22660,6 +22660,48 @@
       "role": "content_child",
       "category": "form_structure",
       "description": "Question types for service"
+    },
+    "employeeCrew": {
+      "role": "assignment",
+      "category": "crew_membership",
+      "description": "Employee-to-crew assignments - tracks which employees are assigned to which crews, not time tracking data",
+      "exclude_as_bridge_for": [
+        "workTime",
+        "employee"
+      ],
+      "note": "Only needed when querying crew membership or assignments, not for time entries"
+    },
+    "employeeRoleWorkTimeType": {
+      "role": "configuration",
+      "category": "permission",
+      "description": "Allowed work time types per employee role - defines permissions/configuration, not actual time entries",
+      "exclude_as_bridge_for": [
+        "workTime",
+        "workTimeType"
+      ],
+      "note": "Only needed when querying role permissions or allowed types, not for actual time tracking"
+    },
+    "expense": {
+      "role": "instance",
+      "category": "financial",
+      "description": "Job-related expenses - instance data, not a bridge. Only include when explicitly requested.",
+      "use_as_bridge": false,
+      "exclude_as_bridge_for": [
+        "workOrder",
+        "employee",
+        "crew"
+      ],
+      "note": "Financial expense records - only include when explicitly requested. Do NOT auto-add as bridge."
+    },
+    "user": {
+      "role": "satellite",
+      "category": "audit",
+      "description": "User accounts - audit/reference data, not a bridge",
+      "exclude_as_bridge_for": [
+        "customer",
+        "employee",
+        "workOrder"
+      ]
     }
   }
 }

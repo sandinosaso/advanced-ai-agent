@@ -28,3 +28,4 @@ class SQLGraphState(TypedDict):
     referenced_ids: Optional[Dict[str, List]]
     referenced_entity: Optional[str]  # e.g. "inspection", "workOrder" - from follow-up detection
     query_resolved: Optional[bool]  # False when we gave up after retries (DB/validation error)
+    anchor_table: Optional[str]  # Primary table for FROM clause (workOrder, asset, etc.)

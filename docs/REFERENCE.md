@@ -138,25 +138,20 @@ Used by SQL agent to:
 
 ## Secure Views Reference
 
-### Current Secure Views
+### Configuration
 
-```python
-SECURE_VIEW_MAP = {
-    "user": "secure_user",
-    "employee": "secure_employee",
-    "workOrder": "secure_workorder",
-    "customer": "secure_customer",
-    "customerLocation": "secure_customerlocation",
-    "customerContact": "secure_customercontact",
-}
-```
+The secure view mapping is **discovered from the database at runtime**. Base tables that require secure views are listed in the `SECURE_BASE_TABLES` environment variable (comma-separated). The system matches them to `secure_*` views in the database.
 
 **Location**: `src/utils/sql/secure_views.py`
+
+**Example** (`.env`): `SECURE_BASE_TABLES=user,customer,customerLocation,customerContact,employee,workOrder`
 
 ### Functions
 
 | Function | Purpose | Example |
 |----------|---------|---------|
+| `get_secure_view_map()` | Get base → secure view mapping (after init) | `get_secure_view_map()["employee"]` → `"secure_employee"` |
+| `get_secure_views()` | Set of secure view names | `"secure_employee" in get_secure_views()` |
 | `is_secure_table(table)` | Check if table needs secure view | `is_secure_table("employee")` → `True` |
 | `to_secure_view(table)` | Convert to secure view | `to_secure_view("employee")` → `"secure_employee"` |
 | `rewrite_secure_tables(sql)` | Rewrite SQL query | `rewrite_secure_tables("SELECT * FROM employee")` → `"SELECT * FROM secure_employee"` |
@@ -360,7 +355,7 @@ results = vector_store.hybrid_search(
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| `Table 'secure_xyz' doesn't exist` | Hallucinated table | Check `SECURE_VIEW_MAP`, rebuild join graph |
+| `Table 'secure_xyz' doesn't exist` | Hallucinated or missing view | Add base table to `SECURE_BASE_TABLES` (`.env`), ensure view exists in MySQL, rebuild join graph |
 | `context_length_exceeded` | Too many tokens | Reduce `sql_sample_rows`, limit tables |
 | `No path found` | Tables not connected | Check relationships, increase `max_hops` |
 | `Views return NULL` | Missing encryption key | Set `DB_ENCRYPT_KEY` in `.env` |
@@ -661,13 +656,9 @@ MAX_QUERY_ROWS=100
 
 ### Fix: Missing Secure Views
 
-```python
-# Add to SECURE_VIEW_MAP
-SECURE_VIEW_MAP["newtable"] = "secure_newtable"
-
-# Rebuild join graph
-python scripts/build_join_graph.py
-```
+1. Create the `secure_newtable` view in MySQL (with `AES_DECRYPT` as needed).
+2. Add the base table to `SECURE_BASE_TABLES` in `.env`, e.g. `SECURE_BASE_TABLES=...,newtable`.
+3. Rebuild join graph: `uv run python scripts/build_join_graph.py` (or `python scripts/build_join_graph.py`).
 
 ### Fix: Path Finder Not Working
 

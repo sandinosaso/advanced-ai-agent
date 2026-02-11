@@ -85,16 +85,24 @@ def resolve_domain_terms_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraph
         try:
             resolution = ctx.domain_ontology.resolve_domain_term(term)
             if resolution:
-                resolutions.append(
-                    {
-                        "term": resolution.term,
-                        "entity": resolution.entity,
-                        "tables": resolution.tables,
-                        "filters": resolution.filters,
-                        "confidence": resolution.confidence,
-                        "strategy": resolution.resolution_strategy,
-                    }
-                )
+                res_dict = {
+                    "term": resolution.term,
+                    "entity": resolution.entity,
+                    "tables": resolution.tables,
+                    "filters": resolution.filters,
+                    "confidence": resolution.confidence,
+                    "strategy": resolution.resolution_strategy,
+                }
+                # Include hints if present
+                if resolution.hints:
+                    res_dict["hints"] = resolution.hints
+                # Include extra (term-specific attributes) if present
+                if resolution.extra:
+                    res_dict["extra"] = resolution.extra
+                # Include required_joins if present
+                if resolution.required_joins:
+                    res_dict["required_joins"] = resolution.required_joins
+                resolutions.append(res_dict)
         except Exception as e:
             logger.error(f"Failed to resolve domain term '{term}': {e}")
 

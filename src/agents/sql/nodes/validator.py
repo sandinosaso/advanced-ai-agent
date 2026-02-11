@@ -73,7 +73,7 @@ def validate_sql_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
     if errors:
         state["validation_errors"] = errors
         state["last_sql_error"] = " | ".join(errors)
-        logger.error(f"SQL validation failed with {len(errors)} errors")
+        logger.error(f"SQL validation failed with {len(errors)} errors. Last error: {state['last_sql_error']}")
     else:
         state["validation_errors"] = None
         logger.debug("SQL validation passed")

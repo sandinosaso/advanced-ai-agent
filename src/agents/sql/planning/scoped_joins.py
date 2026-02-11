@@ -248,7 +248,8 @@ def extract_scoped_tables_from_constraints(
 def determine_join_type_for_table(
     table: str,
     join_graph: Dict[str, Any],
-    selected_tables: Set[str]
+    selected_tables: Set[str],
+    auto_added_bridges: List[str] = None
 ) -> str:
     """
     Determine if a table should use LEFT JOIN based on its semantic role.
@@ -257,17 +258,27 @@ def determine_join_type_for_table(
         table: Table name to check
         join_graph: Join graph with table metadata
         selected_tables: Set of currently selected tables
+        auto_added_bridges: List of tables that were auto-added as bridges (not explicitly requested)
         
     Returns:
         "LEFT JOIN" if table should use left join, otherwise "JOIN"
         
     Rules:
+    - If table was auto-added as a bridge, use LEFT JOIN (prevents data loss if incorrectly identified)
     - If table has category="form_data", use LEFT JOIN
       (these are optional user-generated content like answers)
     - If table has requires_scoping=true, use LEFT JOIN
       (scoped children may not exist for all parents)
     - Otherwise use default JOIN
     """
+    auto_added_bridges = auto_added_bridges or []
+    
+    # NEW: If this table was auto-added as a bridge, use LEFT JOIN
+    # This prevents data loss if the bridge was incorrectly identified
+    if table in auto_added_bridges:
+        logger.debug(f"Table {table} is auto-added bridge, using LEFT JOIN")
+        return "LEFT JOIN"
+    
     table_metadata = join_graph.get("table_metadata", {})
     metadata = table_metadata.get(table, {})
     
@@ -289,7 +300,8 @@ def determine_join_type_for_table(
 
 def get_join_type_hints(
     selected_tables: List[str],
-    join_graph: Dict[str, Any]
+    join_graph: Dict[str, Any],
+    auto_added_bridges: List[str] = None
 ) -> str:
     """
     Build hints about which tables should use LEFT JOIN vs JOIN.
@@ -297,10 +309,13 @@ def get_join_type_hints(
     Args:
         selected_tables: List of selected table names
         join_graph: Join graph with table metadata
+        auto_added_bridges: List of tables that were auto-added as bridges
         
     Returns:
         Formatted string with join type hints for prompt
     """
+    auto_added_bridges = auto_added_bridges or []
+    
     hints = "\n" + "=" * 70 + "\n"
     hints += "JOIN TYPE REQUIREMENTS\n"
     hints += "=" * 70 + "\n"
@@ -310,7 +325,7 @@ def get_join_type_hints(
     
     selected_set = set(selected_tables)
     for table in selected_tables:
-        join_type = determine_join_type_for_table(table, join_graph, selected_set)
+        join_type = determine_join_type_for_table(table, join_graph, selected_set, auto_added_bridges)
         if join_type == "LEFT JOIN":
             left_join_tables.append(table)
         else:

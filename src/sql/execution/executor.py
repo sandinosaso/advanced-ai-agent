@@ -3,8 +3,12 @@ SQL database tool for querying the database.
 Provides safe, read-only access to database through natural language.
 """
 
+import json
 import re
-from typing import List, Optional, Set, Tuple
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any, List, Optional, Set, Tuple
+from uuid import UUID
 from sqlalchemy import create_engine, inspect, text
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
@@ -19,6 +23,21 @@ from src.utils.sql.secure_views import (
     get_secure_views
 )
 from src.sql.execution.secure_rewriter import rewrite_secure_tables, validate_tables_exist
+
+
+def _json_serial(val: Any) -> Any:
+    """Convert DB row values to JSON-serializable types so _parse_sql_result gets list of dicts."""
+    if val is None:
+        return None
+    if isinstance(val, (str, int, float, bool)):
+        return val
+    if isinstance(val, (date, datetime)):
+        return val.isoformat()
+    if isinstance(val, Decimal):
+        return float(val) if val.as_tuple().exponent >= 0 else str(val)
+    if isinstance(val, UUID):
+        return str(val)
+    return str(val)
 
 
 class SQLQueryTool:
@@ -246,13 +265,15 @@ class SQLQueryTool:
                 # Fetch all rows
                 rows = result.fetchall()
                 
-                # Format as string (same format as LangChain SQLDatabase.run)
+                # Format as JSON list of dicts so finalize _parse_sql_result succeeds and BFF gets structured_data
                 if not rows:
                     result_string = "[]"
                 else:
-                    # Convert rows to list of tuples for string representation
-                    row_tuples = [tuple(row) for row in rows]
-                    result_string = str(row_tuples)
+                    rows_as_dicts = [
+                        {column_names[i]: _json_serial(row[i]) for i in range(len(column_names))}
+                        for row in rows
+                    ]
+                    result_string = json.dumps(rows_as_dicts)
                 
                 logger.success(f"Query executed successfully, returned {len(rows)} rows with {len(column_names)} columns")
                 logger.debug(f"Column names: {column_names}")

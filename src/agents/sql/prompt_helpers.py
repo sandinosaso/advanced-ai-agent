@@ -279,56 +279,7 @@ def build_bridge_table_example(join_graph: Dict[str, Any]) -> str:
     )
 
 
-def build_duplicate_join_example(join_graph: Dict[str, Any]) -> str:
-    """
-    Build a dynamic duplicate join error example from join graph.
-    
-    Args:
-        join_graph: Join graph containing relationships
-        
-    Returns:
-        Example string with real or generic table names
-    """
-    # Try to find a table with multiple foreign keys
-    if join_graph and "tables" in join_graph:
-        for table_name, table_info in join_graph["tables"].items():
-            columns = table_info.get("columns", [])
-            fk_cols = [c for c in columns if c.endswith("Id") and c != "id"]
-            
-            if len(fk_cols) >= 2:
-                # Found a table with multiple FKs
-                fk1, fk2 = fk_cols[:2]
-                ref_table1 = fk1.replace("Id", "")
-                ref_table2 = fk2.replace("Id", "")
-                
-                return f"""COMMON CAUSES:
-1. Same table joined twice with different conditions:
-   BAD:
-   JOIN {table_name} ON {table_name}.{fk1} = {ref_table1}.id
-   JOIN {table_name} ON {table_name}.{fk2} = {ref_table2}.id
 
-   GOOD (pick the most direct path):
-   JOIN {table_name} ON {table_name}.{fk2} = {ref_table2}.id
-
-2. Trying to use multiple join paths to the same table:
-   - Choose the SHORTEST path with HIGHEST confidence
-   - Use direct foreign key relationships when available
-   - NOT indirect paths through multiple tables"""
-    
-    # Generic fallback
-    return """COMMON CAUSES:
-1. Same table joined twice with different conditions:
-   BAD:
-   JOIN tableA ON tableA.fkId1 = tableB.id
-   JOIN tableA ON tableA.fkId2 = tableC.id
-
-   GOOD (pick the most direct path):
-   JOIN tableA ON tableA.fkId2 = tableC.id
-
-2. Trying to use multiple join paths to the same table:
-   - Choose the SHORTEST path with HIGHEST confidence
-   - Use direct foreign key relationships when available
-   - NOT indirect paths through multiple tables"""
 
 
 def get_most_connected_tables(join_graph: Dict[str, Any], n: int = 5) -> List[str]:
@@ -437,20 +388,27 @@ def build_display_attributes_examples(
         if not display_manager.has_configuration(table):
             continue
         
-        display_cols = display_manager.get_display_columns(table, include_id=True)
+        display_cols = display_manager.get_display_columns(table, include_id=False)
         primary_label = display_manager.get_primary_label(table)
         template_rel = display_manager.get_template_relationship(table)
         
-        if not display_cols or len(display_cols) <= 1:
-            continue
-        
-        # Build example based on table configuration
-        if primary_label:
+        # Handle all tables, including those with 0-1 columns
+        if not display_cols:
+            # Table has no display columns (e.g. crew) - explicitly say don't show id/audit
+            examples.append(
+                f"- For {table} queries, do NOT select id or audit columns (createdBy, updatedBy, createdAt, updatedAt)"
+            )
+        elif len(display_cols) == 1:
+            # Table has 1 column (e.g. equipment with ["quantity"])
+            examples.append(
+                f"- For {table} queries, SELECT {display_cols[0]} (do NOT include id)"
+            )
+        elif primary_label:
             # Table has human-readable labels
             label_str = ", ".join(primary_label)
             examples.append(
                 f"- For {table} queries, SELECT {', '.join(display_cols[:4])} "
-                f"(always include {label_str} for readability, not just id)"
+                f"(always include {label_str}, do NOT include id unless configured)"
             )
         elif template_rel:
             # Table has template relationship
@@ -463,8 +421,8 @@ def build_display_attributes_examples(
         else:
             # Generic display columns
             examples.append(
-                f"- For {table} queries, prefer selecting {', '.join(display_cols[:4])} "
-                f"(human-readable columns, not just id)"
+                f"- For {table} queries, SELECT {', '.join(display_cols[:4])} "
+                f"(do NOT include id or audit columns)"
             )
         
         example_count += 1
