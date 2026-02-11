@@ -2,12 +2,13 @@
 Orchestrator routing - question classification logic
 """
 
-from typing import Literal, List, Sequence
+from typing import Literal, List, Sequence, Any
 from loguru import logger
 
 from langchain_core.messages import HumanMessage, AIMessage
 
 from src.agents.orchestrator.context import OrchestratorContext
+from src.llm.response_utils import extract_text_from_response
 
 
 def _build_sql_examples(business_entities: List[str]) -> str:
@@ -95,9 +96,9 @@ def classify_question(
         context_parts = []
         for msg in recent_messages:
             if isinstance(msg, HumanMessage):
-                context_parts.append(f"User: {msg.content}")
+                context_parts.append(f"User: {extract_text_from_response(msg)}")
             elif isinstance(msg, AIMessage):
-                content = msg.content
+                content = extract_text_from_response(msg)
                 if "Routing to" in content or "agent" in content.lower():
                     context_parts.append(f"Assistant: {content}")
                 elif len(content) < 100:
@@ -176,11 +177,7 @@ Respond with ONLY one word: SQL, RAG, or GENERAL"""
 
     try:
         response = ctx.llm.invoke([HumanMessage(content=classification_prompt)])
-        classification = (
-            str(response.content).strip().upper()
-            if hasattr(response, "content") and response.content
-            else "GENERAL"
-        )
+        classification = extract_text_from_response(response).strip().upper() or "GENERAL"
     except Exception as e:
         error_msg = str(e)
         if "404" in error_msg or "not found" in error_msg.lower() or "model" in error_msg.lower():

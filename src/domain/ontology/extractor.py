@@ -14,6 +14,7 @@ from pathlib import Path
 
 from src.utils.logging import logger
 from src.llm.client import create_llm
+from src.llm.response_utils import extract_text_from_response
 from src.config.settings import settings
 
 
@@ -108,7 +109,8 @@ Return ONLY a JSON array of strings, e.g. ["crane", "inspection"]."""
             llm = self._get_llm()
             logger.debug(f"Atomic extraction prompt: {prompt[:500]}...")
             response = llm.invoke(prompt)
-            raw = str(response.content).strip() if hasattr(response, "content") and response.content else "[]"
+            
+            raw = extract_text_from_response(response).strip() or "[]"
             if raw.startswith("```"):
                 lines = raw.split("\n")
                 if len(lines) > 2:

@@ -237,10 +237,19 @@ async def stream_orchestrator_response(
                             first_final_token = False  # Still mark as sent to avoid repeated warnings
                     
                     # Emit semantic token event
+                    # Handle content as string or list (for models like gpt-5.2-pro that return content blocks)
+                    content_str = chunk.content
+                    if isinstance(content_str, list):
+                        # Extract text from content blocks
+                        content_str = "".join(
+                            block.get("text", "") if isinstance(block, dict) else str(block)
+                            for block in content_str
+                        )
+                    
                     token_event = StreamEvent(
                         event="token",
                         channel=current_node,
-                        content=chunk.content,
+                        content=content_str,
                         structured_data=structured_data_for_token
                     )
                     yield f"data: {token_event.model_dump_json()}\n\n"

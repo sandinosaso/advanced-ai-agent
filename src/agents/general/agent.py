@@ -11,6 +11,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
 
 from src.llm.client import create_llm
+from src.llm.response_utils import extract_text_from_response
 from src.config.settings import settings
 
 
@@ -78,9 +79,8 @@ The conversation history is provided in the messages above. Use it to give accur
 
         response = self.llm.invoke(messages_for_llm)
         answer = (
-            response.content
-            if hasattr(response, "content") and response.content
-            else "I couldn't generate an answer. Please try again."
+            extract_text_from_response(response).strip()
+            or "I couldn't generate an answer. Please try again."
         )
 
         return answer

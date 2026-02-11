@@ -20,6 +20,7 @@ from src.agents.sql.planning import (
     get_join_type_hints,
 )
 from src.agents.sql.prompt_helpers import build_bridge_table_example
+from src.llm.response_utils import extract_text_from_response
 
 
 def filter_relationships_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
@@ -334,5 +335,5 @@ IMPORTANT: Do NOT include SQL code in this response. Only provide the JOIN_PATH 
 
     logger.debug(f"[PROMPT] plan_joins prompt:\n{prompt}")
     response = ctx.llm.invoke(prompt)
-    state["join_plan"] = str(response.content) if hasattr(response, "content") and response.content else ""
+    state["join_plan"] = extract_text_from_response(response)
     return state

@@ -11,6 +11,7 @@ from src.agents.sql.context import SQLContext
 from src.agents.sql.utils import trace_step
 from src.config.settings import settings
 from src.sql.execution.secure_rewriter import rewrite_secure_tables, from_secure_view
+from src.llm.response_utils import extract_text_from_response
 
 
 # Common error patterns hint (used by legacy correction nodes)
@@ -278,7 +279,7 @@ CORRECTED SQL QUERY:"""
     logger.debug(f"[PROMPT] correct_sql full prompt: {prompt}")
     try:
         response = ctx.llm.invoke(prompt)
-        corrected_sql = str(response.content).strip() if hasattr(response, "content") and response.content else ""
+        corrected_sql = extract_text_from_response(response).strip()
         corrected_sql = _extract_sql_from_markdown(corrected_sql)
         if corrected_sql.startswith("```"):
             lines = corrected_sql.split("\n")

@@ -14,6 +14,7 @@ from src.config.settings import settings
 from src.domain.ontology.formatter import format_domain_context_for_table_selection
 from src.memory.query_memory import QueryResultMemory
 from src.agents.sql.prompt_helpers import get_most_connected_tables
+from src.llm.response_utils import extract_text_from_response
 
 
 def determine_anchor_table(
@@ -179,7 +180,8 @@ Return ONLY a JSON array of table names that ACTUALLY EXIST in the list above. N
 
     logger.info(f"[PROMPT] select_tables prompt:\n{prompt}")
     response = ctx.llm.invoke(prompt)
-    raw = str(response.content).strip() if hasattr(response, "content") and response.content else ""
+    
+    raw = extract_text_from_response(response).strip()
     logger.info(f"Raw LLM output: {raw}")
 
     try:

@@ -11,6 +11,7 @@ from src.agents.sql.utils import trace_step, entity_to_id_field
 from src.config.settings import settings
 from src.memory.query_memory import QueryResultMemory
 from src.agents.sql.prompt_helpers import get_sample_table_names
+from src.llm.response_utils import extract_text_from_response
 
 
 def detect_followup_node(state: SQLGraphState, ctx: SQLContext) -> SQLGraphState:
@@ -94,7 +95,7 @@ If is_followup=false, set referenced_entity and referenced_ids to null.
 
     try:
         response = ctx.llm.invoke(prompt)
-        raw = str(response.content).strip() if hasattr(response, "content") and response.content else ""
+        raw = extract_text_from_response(response).strip()
 
         if raw.startswith("```"):
             lines = raw.split("\n")

@@ -11,7 +11,7 @@ from src.agents.sql.state import SQLGraphState
 from src.agents.sql.context import SQLContext
 from src.agents.sql.utils import trace_step
 from src.config.settings import settings
-from src.domain.ontology.formatter import build_where_clauses, format_domain_context
+from src.domain.ontology.formatter import build_where_clauses, format_domain_context, get_resolution_extra
 from src.sql.execution.secure_rewriter import rewrite_secure_tables, from_secure_view, to_secure_view
 from src.agents.sql.planning import (
     extract_tables_from_join_plan,
@@ -26,6 +26,7 @@ from src.agents.sql.prompt_helpers import (
     build_column_mismatch_example,
     build_display_attributes_examples,
 )
+from src.llm.response_utils import extract_text_from_response
 
 
 def _validate_select_tables(sql: str) -> None:
@@ -108,6 +109,13 @@ def get_default_table_filter_clauses(selected_tables: List[str], registry: Dict[
                     clauses.append(clause)
     
     return clauses
+
+
+def _should_skip_default_table_filters(domain_resolutions: List[Dict[str, Any]]) -> bool:
+    """Return True if any resolution has skip_default_table_filters (e.g. user asked for internals/hidden)."""
+    return any(
+        get_resolution_extra(r, "skip_default_table_filters") for r in (domain_resolutions or [])
+    )
 
 
 def _rewrite_sql_from_anchor(sql: str, anchor_table: str) -> str:
@@ -238,6 +246,7 @@ def _build_domain_filter_instructions(state: SQLGraphState, ctx: SQLContext) -> 
     """Build instructions for domain filters and calculation hints in SQL generation prompt"""
     domain_resolutions = state.get("domain_resolutions", [])
     selected_tables = state.get("tables", [])
+    skip_default = _should_skip_default_table_filters(domain_resolutions)
     
     instructions = ""
     
@@ -250,13 +259,16 @@ def _build_domain_filter_instructions(state: SQLGraphState, ctx: SQLContext) -> 
     # Get domain-based WHERE clauses
     domain_clauses = build_where_clauses(domain_resolutions) if domain_resolutions else []
     
-    # Get default table filter clauses
+    # Get default table filter clauses (skip when user asked for internals/hidden)
     default_clauses = []
-    if ctx.domain_ontology and ctx.domain_ontology.registry:
+    if not skip_default and ctx.domain_ontology and ctx.domain_ontology.registry:
         default_clauses = get_default_table_filter_clauses(selected_tables, ctx.domain_ontology.registry)
     
     # Merge all clauses
     all_clauses = domain_clauses + default_clauses
+    
+    if skip_default:
+        instructions += "\n\nUser asked to include internal/hidden records. Do NOT add WHERE conditions for isInternal=0 or other default production-only filters (workOrder, employee, customer).\n"
     
     if all_clauses:
         instructions += "\n\nDOMAIN FILTER REQUIREMENTS:\n"
@@ -536,7 +548,7 @@ CRITICAL FORMATTING: Return ONLY the SQL query. Do NOT wrap it in markdown code 
 
     logger.info(f"[PROMPT] generate_sql prompt:\n{prompt}")
     response = ctx.llm.invoke(prompt)
-    raw_sql = str(response.content).strip() if hasattr(response, "content") and response.content else ""
+    raw_sql = extract_text_from_response(response).strip()
     if raw_sql.startswith("```"):
         lines = raw_sql.split("\n")
         raw_sql = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
@@ -546,10 +558,11 @@ CRITICAL FORMATTING: Return ONLY the SQL query. Do NOT wrap it in markdown code 
     _validate_select_tables(raw_sql)
 
     domain_resolutions = state.get("domain_resolutions", [])
+    skip_default = _should_skip_default_table_filters(domain_resolutions)
     
-    # Get default table filter clauses
+    # Get default table filter clauses (skip when user asked for internals/hidden)
     default_clauses = []
-    if ctx.domain_ontology and ctx.domain_ontology.registry:
+    if not skip_default and ctx.domain_ontology and ctx.domain_ontology.registry:
         selected_tables = state.get("tables", [])
         default_clauses = get_default_table_filter_clauses(selected_tables, ctx.domain_ontology.registry)
     
