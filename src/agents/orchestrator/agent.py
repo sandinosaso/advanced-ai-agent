@@ -21,6 +21,7 @@ from src.agents.orchestrator.nodes import (
     execute_sql_node,
     execute_rag_node,
     execute_general_node,
+    maybe_generate_chart_node,
     finalize_node,
 )
 
@@ -99,6 +100,7 @@ class OrchestratorAgent:
 
         workflow.add_node("classify", lambda s: classify_node(s, ctx))
         workflow.add_node("sql_agent", lambda s: execute_sql_node(s, ctx))
+        workflow.add_node("maybe_chart", lambda s: maybe_generate_chart_node(s, ctx))
         workflow.add_node("rag_agent", lambda s: execute_rag_node(s, ctx))
         workflow.add_node("general_agent", lambda s: execute_general_node(s, ctx))
         workflow.add_node("finalize", lambda s: finalize_node(s, ctx))
@@ -109,7 +111,8 @@ class OrchestratorAgent:
             _route_after_classification,
             {"sql_agent": "sql_agent", "rag_agent": "rag_agent", "general_agent": "general_agent"}
         )
-        workflow.add_edge("sql_agent", "finalize")
+        workflow.add_edge("sql_agent", "maybe_chart")
+        workflow.add_edge("maybe_chart", "finalize")
         workflow.add_edge("rag_agent", "finalize")
         workflow.add_edge("general_agent", "finalize")
         workflow.add_edge("finalize", END)
@@ -132,7 +135,8 @@ class OrchestratorAgent:
             "general_result": None,
             "final_answer": None,
             "final_structured_data": None,
-            "query_result_memory": None
+            "query_result_memory": None,
+            "chart_spec": None,
         }
 
         final_state = self.workflow.invoke(initial_state)

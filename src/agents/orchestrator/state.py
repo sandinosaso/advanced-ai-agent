@@ -19,3 +19,4 @@ class AgentState(TypedDict):
     final_answer: str | None
     final_structured_data: List[Dict[str, Any]] | None  # Structured data for final answer (BFF markdown)
     query_result_memory: List[Dict[str, Any]] | None  # Memory of recent query results for follow-ups
+    chart_spec: Dict[str, Any] | None  # ChartSpec (type, title, x_key, y_key, svg, meta) when user asked for chart

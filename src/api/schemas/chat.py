@@ -4,7 +4,7 @@ Chat streaming models for internal API contract
 This is an internal service API - UI concepts are handled by the Node.js BFF layer.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, Literal, Dict, Any, List
 
 from src.api.schemas.conversation import AgentInput, ConversationContext
@@ -47,18 +47,29 @@ class StreamEvent(BaseModel):
     - route_decision: Agent routing decision
     - complete: Stream finished
     - error: Error occurred
+    - chart: ChartSpec + SVG for visualization (type, title, x_key, y_key, svg, meta)
     """
-    event: Literal["token", "tool_start", "route_decision", "complete", "error"]
-    
+    event: Literal["token", "tool_start", "route_decision", "complete", "error", "chart"]
+    # Mirror of event for BFF/consumers that key off "type" (set from event if omitted)
+    type: Optional[Literal["token", "tool_start", "route_decision", "complete", "error", "chart"]] = None
+
     # Optional fields depending on event type
-    channel: Optional[Literal["classify", "sql_agent", "rag_agent", "general_agent", "final"]] = None
+    channel: Optional[Literal["classify", "sql_agent", "rag_agent", "general_agent", "final", "chart"]] = None
     content: Optional[str] = None  # Raw content (backward compatible)
     structured_data: Optional[List[Dict[str, Any]]] = None  # Structured array for BFF markdown conversion
     tool: Optional[str] = None
     route: Optional[Literal["sql", "rag", "general"]] = None
     stats: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
-    
+    # Chart event payload (when event == "chart"): ChartSpec with type, title, x_key, y_key, svg, meta
+    chart_spec: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def set_type_from_event(self):
+        if self.type is None:
+            object.__setattr__(self, "type", self.event)
+        return self
+
     model_config = {
         "json_schema_extra": {
             "examples": [

@@ -31,6 +31,8 @@ dependencies = [
     "pymysql>=1.1.1",
     "cryptography>=41.0.0",  # required by PyMySQL for MySQL 8 caching_sha2_password auth
     "sqlglot>=28.0.0",  # SQL parser and AST for deterministic query fixes
+    "matplotlib>=3.8.0",  # Chart generation (SVG output)
+    "seaborn>=0.13.0",  # Chart styling for visualizations
 ]
 
 [project.optional-dependencies]
