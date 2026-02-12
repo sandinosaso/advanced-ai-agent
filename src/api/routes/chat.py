@@ -131,8 +131,9 @@ async def stream_orchestrator_response(
             "final_answer": None,
             "final_structured_data": None,
             "query_result_memory": checkpoint_query_result_memory,  # From checkpoint so follow-ups have previous results
+            "chart_spec": None,
         }
-        
+
         # Track statistics
         total_tokens = 0
         current_node = None
@@ -206,7 +207,16 @@ async def stream_orchestrator_response(
                 else:
                     logger.debug(f"finalize node output keys: {list(outputs.keys()) if isinstance(outputs, dict) else 'not a dict'}")
                     logger.debug(f"final_structured_data not found in finalize output")
-            
+                # Capture chart_spec from finalize output (set by maybe_chart node on SQL path)
+                chart_spec_to_send = outputs.get("chart_spec") if isinstance(outputs, dict) else None
+                if chart_spec_to_send and isinstance(chart_spec_to_send, dict):
+                    svg_len = len(chart_spec_to_send.get("svg") or "")
+                    logger.info(
+                        f"✅ Captured chart_spec from finalize step (type={chart_spec_to_send.get('type')}, svg={svg_len} chars)"
+                    )
+                    chart_event = StreamEvent(event="chart", channel="chart", chart_spec=chart_spec_to_send)
+                    yield f"data: {chart_event.model_dump_json()}\n\n"
+
             # Stream content tokens
             if event_type == "on_chat_model_stream":
                 event_data = event.get("data")
@@ -317,7 +327,8 @@ async def stream_orchestrator_response(
                 "general_result": None,
                 "final_answer": None,
                 "final_structured_data": None,
-                "query_result_memory": None
+                "query_result_memory": None,
+                "chart_spec": None,
             }
             
             async for event in fallback_agent.astream_events(fallback_initial_state, version="v1"):

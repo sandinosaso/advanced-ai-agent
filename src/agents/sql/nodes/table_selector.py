@@ -127,9 +127,9 @@ Key IDs Available (you can use these directly in WHERE clauses):
 
             followup_context += """
 INSTRUCTIONS FOR FOLLOW-UP:
-- You already have the IDs above - use them directly in your WHERE clause
-- Select tables needed to answer the NEW information requested
-- You may need to include some tables from the previous query to join with the IDs
+- Select ONLY the tables needed to answer the NEW question. Do NOT include tables from the previous query unless the new question explicitly asks for that entity.
+- You already have the IDs above - use them directly in your WHERE clause when relevant
+- Prefer the minimal set: for "total X grouped by Y" you typically need only the table(s) for X and the table for Y (and direct join path between them)
 - Don't rebuild the entire previous query - we already have the target IDs
 """
 
@@ -160,10 +160,12 @@ INSTRUCTIONS FOR FOLLOW-UP:
 Select the set of tables needed to answer the question.
 
 Rules:
-- Return 3 to 8 tables (prefer fewer tables that you need to answer the question)
+- Return 3 to 8 tables (prefer fewer tables—only those strictly needed for the question)
 - Select from ACTUAL available tables (join graph reflects reality)
 - If unsure, return fewer tables
 - DO NOT invent table names that don't exist
+- ONLY include a table if the question explicitly involves that entity
+- For "total X grouped by Y", include only the table(s) for X, the table for Y, and any table required to join them—no extra tables
 - Prefer always to show labels/name or any column with text instead of IDS use IDS just for joining tables/ grouping but not to show in the result unless explicitly asked for
   (make sure to include the table that has those names)
 - IMPORTANT: Only include parent/category tables if explicitly asked for
