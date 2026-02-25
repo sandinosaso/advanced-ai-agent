@@ -12,6 +12,7 @@ from src.agents.sql.utils import trace_step
 from src.config.settings import settings
 from src.sql.execution.secure_rewriter import rewrite_secure_tables, from_secure_view
 from src.llm.response_utils import extract_text_from_response
+from src.sql.analysis import sanitize_sql_from_llm
 
 
 # Common error patterns hint (used by legacy correction nodes)
@@ -267,7 +268,13 @@ INSTRUCTIONS:
 2. Identify which part of the query is causing the error.
 3. Fix ONLY that specific issue - preserve everything else (SELECT columns, WHERE, JOINs, join types).
 4. Column names are CASE-SENSITIVE; use camelCase as shown in the schemas.
-5. Return ONLY the corrected SQL query. No markdown code blocks, no comments, no explanation.
+
+OUTPUT FORMAT — EXTREMELY IMPORTANT:
+- Your response MUST start with SELECT (or WITH for CTEs). Nothing before it.
+- Do NOT include any text before or after the SQL.
+- No "Here is the corrected SQL:", no explanation, no commentary.
+- No markdown code blocks (no ```sql).
+- Output ONLY the raw SQL query. NOTHING ELSE.
 
 CORRECTED SQL QUERY:"""
 
@@ -280,12 +287,7 @@ CORRECTED SQL QUERY:"""
     try:
         response = ctx.llm.invoke(prompt)
         corrected_sql = extract_text_from_response(response).strip()
-        corrected_sql = _extract_sql_from_markdown(corrected_sql)
-        if corrected_sql.startswith("```"):
-            lines = corrected_sql.split("\n")
-            corrected_sql = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
-        if corrected_sql.upper().startswith("SQL"):
-            corrected_sql = corrected_sql[3:].strip()
+        corrected_sql = sanitize_sql_from_llm(corrected_sql)
 
         logger.info(f"Corrected SQL (attempt {correction_attempts + 1}): {corrected_sql[:200]}...")
 

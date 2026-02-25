@@ -8,6 +8,7 @@ from src.sql.analysis.ast_utils import (
     get_group_by_expressions,
     find_duplicate_joins,
     get_table_name_from_join,
+    sanitize_sql_from_llm,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "get_group_by_expressions",
     "find_duplicate_joins",
     "get_table_name_from_join",
+    "sanitize_sql_from_llm",
 ]

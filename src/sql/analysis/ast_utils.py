@@ -189,3 +189,127 @@ def find_duplicate_joins(ast: exp.Expression) -> List[Dict[str, any]]:
             logger.debug(f"Found {len(join_nodes)} joins to table '{table}'")
     
     return duplicates
+
+
+def sanitize_sql_from_llm(raw: str) -> str:
+    """
+    Sanitize LLM output to extract a valid SQL query.
+
+    LLMs (especially Ollama / open-source models) often wrap the SQL in natural
+    language such as:
+        "Here is the corrected SQL:\nSELECT ... LIMIT 50"
+        "The query is:\n```sql\nSELECT ...\n```"
+
+    This function:
+    1. Strips markdown code blocks (```sql ... ```)
+    2. Strips natural-language preamble before SELECT
+    3. Strips trailing commentary after the SQL statement
+    4. Validates with sqlglot; if invalid, applies aggressive regex extraction
+    5. Returns a clean SQL string or the best-effort extraction
+
+    Args:
+        raw: Raw LLM output string
+
+    Returns:
+        Cleaned SQL string
+    """
+    import re as _re
+
+    if not raw or not raw.strip():
+        return raw
+
+    text = raw.strip()
+
+    # ── Step 1: Strip markdown code fences ────────────────────────────────
+    md_pattern = _re.compile(r'```(?:sql)?\s*\n?(.*?)\n?```', _re.DOTALL | _re.IGNORECASE)
+    md_match = md_pattern.search(text)
+    if md_match:
+        text = md_match.group(1).strip()
+        logger.debug("Stripped markdown code block from LLM response")
+
+    # ── Step 2: Strip leading natural-language preamble ───────────────────
+    # Common patterns: "Here is the SQL:", "The corrected query is:", etc.
+    # We look for a SELECT/WITH that starts a SQL statement and drop everything before it.
+    preamble_match = _re.search(
+        r'\b(SELECT|WITH)\b',
+        text,
+        _re.IGNORECASE,
+    )
+    if preamble_match and preamble_match.start() > 0:
+        prefix = text[:preamble_match.start()]
+        # Only strip if the prefix looks like natural language (contains letters
+        # but is NOT a SQL keyword like a CTE name).  A simple heuristic: if
+        # the prefix contains a colon or common words like "here", "is", "the",
+        # "query", "sql", "corrected", it is preamble.
+        preamble_indicators = _re.compile(
+            r'(?:here|is|the|query|sql|corrected|following|result|answer|output|:\s*$)',
+            _re.IGNORECASE,
+        )
+        if preamble_indicators.search(prefix):
+            stripped_prefix = text[:preamble_match.start()].strip()
+            logger.warning(
+                f"Stripped LLM preamble ({len(stripped_prefix)} chars): "
+                f"{stripped_prefix[:120]}..."
+            )
+            text = text[preamble_match.start():]
+
+    # ── Step 3: Strip trailing commentary after the SQL ───────────────────
+    # Look for trailing text after the last semicolon or after common SQL
+    # terminators (LIMIT N, closing paren) followed by English text.
+    # Strategy: find the last semicolon; everything after it that is not
+    # whitespace is commentary.
+    semi_pos = text.rfind(';')
+    if semi_pos != -1:
+        after_semi = text[semi_pos + 1:].strip()
+        if after_semi:
+            logger.debug(f"Stripped trailing text after semicolon ({len(after_semi)} chars)")
+            text = text[:semi_pos + 1]
+
+    # Remove trailing semicolons (MySQL executor doesn't need them)
+    text = text.rstrip(';').strip()
+
+    # ── Step 4: Validate with sqlglot ─────────────────────────────────────
+    try:
+        sqlglot.parse_one(text, read="mysql")
+        logger.debug("SQL validated successfully via sqlglot")
+        return text
+    except Exception as first_err:
+        logger.warning(f"sqlglot validation failed after initial cleanup: {first_err}")
+
+    # ── Step 5: Aggressive extraction — grab SELECT ... to end of statement ──
+    # Find the first SELECT (or WITH) and take everything from there.
+    select_match = _re.search(r'\b((?:WITH\s+.*?\)?\s*)?SELECT\b.*)', text, _re.DOTALL | _re.IGNORECASE)
+    if select_match:
+        candidate = select_match.group(1).strip().rstrip(';').strip()
+        # Try to trim trailing English sentences: lines that don't look like SQL
+        lines = candidate.split('\n')
+        clean_lines = []
+        for line in lines:
+            stripped_line = line.strip()
+            # Stop if line looks like English commentary (starts with common
+            # prose words and doesn't contain SQL keywords)
+            if stripped_line and _re.match(
+                r'^(?:This|Note|The|Here|I |Please|Make|Remember|Hope|Let me|Also|In )\b',
+                stripped_line,
+                _re.IGNORECASE,
+            ):
+                # Check it really isn't SQL (e.g. a subquery starting with "IN")
+                if not _re.search(r'\b(?:SELECT|FROM|JOIN|WHERE|GROUP|ORDER|HAVING|UNION|INSERT|UPDATE|DELETE)\b', stripped_line, _re.IGNORECASE):
+                    logger.debug(f"Trimming trailing commentary line: {stripped_line[:80]}")
+                    break
+            clean_lines.append(line)
+        candidate = '\n'.join(clean_lines).strip().rstrip(';').strip()
+
+        try:
+            sqlglot.parse_one(candidate, read="mysql")
+            logger.info(f"Recovered valid SQL after aggressive extraction ({len(candidate)} chars)")
+            return candidate
+        except Exception as second_err:
+            logger.warning(f"sqlglot validation failed even after aggressive extraction: {second_err}")
+            # Return the candidate anyway — it's our best effort and the DB will
+            # give a clear error if it's still invalid
+            return candidate
+
+    # Nothing worked — return whatever we have
+    logger.error("Could not extract valid SQL from LLM response, returning cleaned text as-is")
+    return text

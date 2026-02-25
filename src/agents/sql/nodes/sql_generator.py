@@ -27,6 +27,7 @@ from src.agents.sql.prompt_helpers import (
     build_display_attributes_examples,
 )
 from src.llm.response_utils import extract_text_from_response
+from src.sql.analysis import sanitize_sql_from_llm
 
 
 def _validate_select_tables(sql: str) -> None:
@@ -543,15 +544,17 @@ Join plan (follow this EXACTLY, step by step):
 IMPORTANT: {bridge_example} Only include bridge tables if they are explicitly listed in the JOIN_PATH above. Do NOT add unnecessary bridge tables when direct foreign keys exist.
 {_build_domain_filter_instructions(state, ctx)}
 
-CRITICAL FORMATTING: Return ONLY the SQL query. Do NOT wrap it in markdown code blocks (no ```sql). Just return the raw SQL query text.
+OUTPUT FORMAT — EXTREMELY IMPORTANT:
+- Your response MUST start with SELECT (or WITH for CTEs). Nothing before it.
+- Do NOT include any text before or after the SQL (no "Here is the query:", no explanation, no commentary).
+- Do NOT wrap in markdown code blocks (no ```sql).
+- Output ONLY the raw SQL query. NOTHING ELSE.
 """
 
     logger.info(f"[PROMPT] generate_sql prompt:\n{prompt}")
     response = ctx.llm.invoke(prompt)
     raw_sql = extract_text_from_response(response).strip()
-    if raw_sql.startswith("```"):
-        lines = raw_sql.split("\n")
-        raw_sql = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
+    raw_sql = sanitize_sql_from_llm(raw_sql)
     logger.info(f"Generated SQL (before rewriting): {raw_sql}")
 
     # Validate that SELECT doesn't reference tables not in FROM/JOIN
